@@ -99,13 +99,13 @@ ra_client_api/
 │   ├── bash/full_lifecycle.sh     # bash 完整生命周期示例
 │   ├── python/task_demo.py        # Python 示例
 │   └── node/task_demo.mjs         # Node.js 示例
-└── .codebuddy/
-    └── skills/rollinace-api-client/   # Agent Skill：供其他 AI Agent 直接调用本 API
+└── skills/
+    └── rollinace-api-client/          # Agent Skill：供其他 AI Agent 直接调用本 API
 ```
 
 - 完整接口明细（请求/响应字段、错误码、任务状态取值）见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)。
 - 多语言使用用例见 [docs/USAGE_EXAMPLES.md](docs/USAGE_EXAMPLES.md) 与 [examples/](examples/)。
-- 供其他 AI Agent 调用的 Skill 见 [.codebuddy/skills/rollinace-api-client/](.codebuddy/skills/rollinace-api-client/SKILL.md)。
+- 供其他 AI Agent 调用的 Skill 见 [skills/rollinace-api-client/](skills/rollinace-api-client/SKILL.md)。
 
 ---
 
