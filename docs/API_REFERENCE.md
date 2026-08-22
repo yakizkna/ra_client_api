@@ -84,13 +84,16 @@ POST /v1/rollinace-api/live/tasks
 **成功响应**（HTTP 200）：
 
 ```json
-{ "code": 0, "taskId": "8f3a9c2e1b6d" }
+{ "code": 0, "taskId": "8f3a9c2e1b6d", "matchId": "L76HNWWV" }
 ```
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `code` | int | 业务码，`0` 表示成功 |
 | `taskId` | string | 任务 ID，后续查询/关闭用 |
+| `matchId` | string | 直播间 ID（**可能为空**，见下方说明） |
+
+> **`matchId` 异步回填**：直播间由服务端在任务创建后异步建立，`matchId` 由 rollin-ace 建房间返回后回填。创建请求返回时可能尚未就绪，此时 `matchId` 为空字符串；可稍后通过查询任务状态接口（§3.2）获取。
 
 **错误响应示例**：
 
@@ -126,6 +129,7 @@ GET /v1/rollinace-api/live/tasks/{taskId}
 {
   "code": 0,
   "taskId": "8f3a9c2e1b6d",
+  "matchId": "L76HNWWV",
   "status": "running",
   "detail": "live",
   "error": ""
@@ -136,6 +140,7 @@ GET /v1/rollinace-api/live/tasks/{taskId}
 |---|---|---|
 | `code` | int | 业务码，`0` 表示成功 |
 | `taskId` | string | 任务 ID |
+| `matchId` | string | 直播间 ID（房间未建立时为空） |
 | `status` | string | 任务状态（见下表） |
 | `detail` | string | 内部原始状态（调试用） |
 | `error` | string | 错误信息（仅 `status=error` 时有值） |

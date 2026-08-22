@@ -59,7 +59,9 @@ curl -s -X POST "$BASE/v1/rollinace-api/live/tasks" \
 - `loop`：**固定传 `false`**，`true` 会被拒绝（`code=1`）；
 - `shortName` / `homeShortName` / `awayShortName`：直播间与队伍短名。
 
-成功响应：`{ "code": 0, "taskId": "<taskId>" }`。**以 `code == 0` 判断成功，不要只看 HTTP 状态码。**
+成功响应：`{ "code": 0, "taskId": "<taskId>", "matchId": "<matchId>" }`。**以 `code == 0` 判断成功，不要只看 HTTP 状态码。**
+
+> `matchId` 为直播间 ID，由服务端建房间后**异步回填**：创建请求返回时可能为空字符串（房间尚未建立），可在后续查询任务状态（见下）时获取。
 
 ### 查询任务状态
 

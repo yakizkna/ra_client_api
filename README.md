@@ -40,8 +40,10 @@ curl -s -X POST "$BASE/v1/rollinace-api/live/tasks" \
 成功返回：
 
 ```json
-{ "code": 0, "taskId": "8f3a9c2e1b6d" }
+{ "code": 0, "taskId": "8f3a9c2e1b6d", "matchId": "L76HNWWV" }
 ```
+
+> `matchId` 为直播间 ID，由服务端建房间后**异步回填**：创建请求返回时可能尚未就绪（此时为空字符串），可在后续查询任务状态接口时获取。
 
 > **判断成功以 `code == 0` 为准，不要只看 HTTP 状态码。**
 

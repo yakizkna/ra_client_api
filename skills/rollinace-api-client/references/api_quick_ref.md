@@ -48,7 +48,9 @@
 | `loop` | 否 | 仅允许 `false` |
 | `shortName` / `homeShortName` / `awayShortName` | 否 | 直播间/队伍短名 |
 
-成功：`{ "code": 0, "taskId": "8f3a9c2e1b6d" }`
+成功：`{ "code": 0, "taskId": "8f3a9c2e1b6d", "matchId": "L76HNWWV" }`
+
+> `matchId` 异步回填：创建返回时可能为空（房间尚未建立），查询状态接口可获取。
 
 ## 查询任务状态
 
@@ -58,6 +60,7 @@
 {
   "code": 0,
   "taskId": "8f3a9c2e1b6d",
+  "matchId": "L76HNWWV",
   "status": "running",
   "detail": "live",
   "error": ""
