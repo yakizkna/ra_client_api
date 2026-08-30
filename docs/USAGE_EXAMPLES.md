@@ -165,3 +165,122 @@ bash examples/bash/full_lifecycle.sh --game 2021039309 --board npb --mode replay
 2. 调 `POST .../tasks` 创建任务并保存 `taskId`；
 3. 每 15s 轮询 `GET .../tasks/{taskId}`，直到 `ended` / `error` / `stopped`；
 4. 最后 `DELETE .../tasks/{taskId}` 关闭任务。
+
+---
+
+# AI 对战接口用例（AI Duel API）
+
+本节覆盖「AI 对战接口」`POST /api/ai` 的接入示例（创建 AI 自对弈房 → 按 `allowedActions` 循环决策 → 比赛结束）。
+接口完整说明见 [AI_DUEL_API.md](AI_DUEL_API.md)。
+
+> agent 凭证（`agent_id` + `key`）由服务方在管理端「AI 管理」页创建分配（key 仅创建/重置时显示一次），
+> 请通过环境变量传入，勿硬编码。
+> 可运行脚本：`examples/bash/ai_duel_demo.sh`（bash 自对弈示例）。
+
+## 5. curl — 自对弈最小流程
+
+```bash
+BASE=https://ace.yakidev.top
+AI_AGENT_ID=<agent_id>          # agent 凭证（管理端「AI 管理」页分配）
+AI_AGENT_KEY=<agent_key>        # agent 密钥（key 仅创建/重置时显示一次）
+
+# 1) 创建 AI 自对弈房（3 局制，缩短验证）
+ROOM=$(curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"create","agentId":"'"$AI_AGENT_ID"'","key":"'"$AI_AGENT_KEY"'","innings":3,"startInning":3}' )
+echo "$ROOM" | jq .
+LIVE_ID=$(echo "$ROOM" | jq -r .liveId)
+KEY_AWAY=$(echo "$ROOM" | jq -r '.keys[] | select(.side=="away") | .key')
+
+# 2) 客场先攻：读取局面
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"state","key":"'"$KEY_AWAY"'"}' | jq '{myTurn,allowedActions,version}'
+
+# 3) 执行操作（轮到我且 allowedActions 非空时）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"act","key":"'"$KEY_AWAY"'","op":"roll"}' | jq '{ok,event,result,allowedActions,advanced}'
+```
+
+## 6. Python — 自对弈循环
+
+```python
+import json
+import time
+import urllib.request
+
+BASE = "https://ace.yakidev.top"
+API = f"{BASE}/api/ai"
+AI_AGENT_ID = "<agent_id>"   # 管理端「AI 管理」页分配
+AI_AGENT_KEY = "<agent_key>" # key 仅创建/重置时显示一次，建议从环境变量读取
+
+def post(payload: dict) -> dict:
+    req = urllib.request.Request(
+        API, data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
+
+# 1) 创建自对弈房
+room = post({"action": "create", "agentId": AI_AGENT_ID, "key": AI_AGENT_KEY, "innings": 3, "startInning": 3})
+keys = {k["side"]: k["key"] for k in room["keys"]}
+print("liveId:", room["liveId"])
+
+# 2) 循环决策（客场先攻）
+side = "away"
+while True:
+    st = post({"action": "state", "key": keys[side]})
+    if st.get("matchStatus") in ("ended", "closed"):
+        break
+    # 轮次交换：toMove 决定当前进攻方
+    side = st.get("toMove", side)
+    if not st.get("myTurn") or not st.get("allowedActions"):
+        time.sleep(1)
+        continue
+    # 简单策略：二选一阶段优先 take1B（安打保底），否则掷骰
+    op = "take1B" if "take1B" in st["allowedActions"] else "roll"
+    r = post({"action": "act", "key": keys[side], "op": op})
+    print("op:", op, "| event:", r.get("event"), "| result:", r.get("result"))
+    time.sleep(1)
+print("比赛结束")
+```
+
+## 7. Node.js — 自对弈循环
+
+```js
+const BASE = "https://ace.yakidev.top";
+const API = `${BASE}/api/ai`;
+const AI_AGENT_ID = process.env.AI_AGENT_ID;   // 管理端「AI 管理」页分配
+const AI_AGENT_KEY = process.env.AI_AGENT_KEY; // key 仅创建/重置时显示一次，勿硬编码
+
+const post = (payload) =>
+  fetch(API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => r.json());
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function main() {
+  // 1) 创建自对弈房
+  const room = await post({ action: "create", agentId: AI_AGENT_ID, key: AI_AGENT_KEY, innings: 3, startInning: 3 });
+  const keys = Object.fromEntries(room.keys.map((k) => [k.side, k.key]));
+  console.log("liveId:", room.liveId);
+
+  // 2) 循环决策（客场先攻）
+  let side = "away";
+  for (;;) {
+    const st = await post({ action: "state", key: keys[side] });
+    if (["ended", "closed"].includes(st.matchStatus)) break;
+    side = st.toMove || side;                      // 换边
+    if (!st.myTurn || !st.allowedActions.length) { await sleep(1000); continue; }
+    const op = st.allowedActions.includes("take1B") ? "take1B" : "roll";  // 简单策略
+    const r = await post({ action: "act", key: keys[side], op });
+    console.log("op:", op, "| event:", r.event, "| result:", r.result);
+    await sleep(1000);
+  }
+  console.log("比赛结束");
+}
+
+main();
+```
