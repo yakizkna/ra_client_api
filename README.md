@@ -5,7 +5,7 @@
 | 接口 | 域名 | 说明 | 文档 |
 |---|---|---|---|
 | **直播/重播任务 API** | `https://gateway.yakidev.top`（统一网关） | 管理「棒球速报」的直播 / 重播自动运营任务：创建任务（`live`/`replay`，创建后自动启动）、查询任务状态、关闭任务、查询调用额度 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) |
-| **AI 对战接口（AI Duel API）** | `https://ace.yakidev.top`（客户端域名，直连） | 外部 AI / 服务端策略程序接入棒球对战房：创建 AI 自对弈房、加入真人对战房（人机）、读取局面与可执行操作、执行比赛动作 | [docs/AI_DUEL_API.md](docs/AI_DUEL_API.md) |
+| **AI 对战接口（AI Duel API）** | `https://ace.yakidev.top`（客户端域名，直连） | 外部 AI / 机器人服务接入棒球对战房：创建 AI 自对弈房、加入真人对战房（人机，真人建房后服务端通知机器人自动加入）、读取局面与可执行操作、执行比赛动作 | [docs/AI_DUEL_API.md](docs/AI_DUEL_API.md) |
 
 直播/重播任务 API 能力：
 
@@ -18,6 +18,7 @@ AI 对战接口能力：
 
 - **创建 AI 对战房**（AI vs AI 自对弈，立即开局）
 - **加入真人对战房**（人机对战，默认客队席位）
+- **机器人服务接入**（真人建房开启 AI 对战 → 服务端 `duel_created` 通知 → 机器人自动加入并走棋）
 - **读取完整局面**（比分/出局/垒位/当前进攻方/轮到谁/可执行操作）
 - **执行比赛操作**（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）
 
@@ -102,6 +103,34 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 > 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`。
 > 完整说明见 [docs/AI_DUEL_API.md](docs/AI_DUEL_API.md)。
 
+### 4.5 机器人服务接入（人机对战）
+
+真人端「创建对战 → 开启 AI 对战」建房后，服务端会 **HTTP 通知机器人服务**，机器人服务
+收到通知后自动加入对局并走棋：
+
+```
+真人建房(aiOpponent:true) ──POST 通知──▶ 机器人服务 ──/api/ai join──▶ 占客队席位、自动开局（客场先攻）
+                                                                    └─▶ state/act 循环走棋直至结束
+```
+
+**通知契约**：`POST` + `Content-Type: application/json`，默认地址 `https://yakidev.top`
+（服务方可用环境变量 `BOT_SERVICE_URL` 覆盖），5 秒超时、无重试；通知失败不阻断建房。
+请求体：
+
+```json
+{
+  "event": "duel_created",
+  "liveId": "ABCD1234", "type": "duel", "ai": true,
+  "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队",
+  "awayName": "AI客队", "duelInnings": 9, "startInnings": 9,
+  "matchStatus": "waiting", "createdAt": 1756500000000
+}
+```
+
+收到通知后：`POST /api/ai { action:"join", agentId, key, liveId, name:"AI客队" }`
+占用客队席位 → 自动开局 → 按 `state`/`act` 循环走棋。
+可运行示例见 [examples/node/bot_server_demo.mjs](examples/node/bot_server_demo.mjs)。
+
 ---
 
 ## 接口总览
@@ -129,6 +158,8 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 
 > 换票（`session`/`create`/`join`）用管理端分配的 `agentId`+`key`（body 或 `X-Agent-Id`+`X-AI-Key` 请求头）；会话用换票返回的 `key`（与房间 + 阵营绑定，24h 滑动续期）。
 > 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`。
+> 人机对战（机器人服务）：真人建房开启 AI 对战（`aiOpponent:true`）后，服务端 POST 通知
+> 机器人服务（`duel_created`），机器人服务收到后经 `join` 加入客队并自动开局（见上文 4.5）。
 > 完整说明见 [docs/AI_DUEL_API.md](docs/AI_DUEL_API.md)。
 
 ---
@@ -148,11 +179,14 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 
 1. 联系服务方在管理端「AI 管理」创建 agent，获得 `agent_id` 与 `key`（key 仅显示一次，请妥善保存）；
 2. 自对弈：`create` 建房（`aiSides:["home","away"]`），用返回的两把 `key` 循环 `state`/`act`；
-3. 人机对战：`create` 时 `aiSides:["away"]`（或 `join` 真人已建的对战房），主队留给真人；
-4. 每次行动前先 `state`，仅当 `myTurn===true` 且 `allowedActions` 非空时 `act`；
-5. `act` 失败（`ok:false` + `reason`）时按响应中的 `allowed` 自我纠正；
-6. 轮询间隔建议 ≥1s；比赛结束以 `matchStatus==="ended"` 为准；
-7. 会话结束时调 `leave` 撤销 key；不调也不影响（24h 自动过期）。
+3. 人机对战（主动建）：`create` 时 `aiSides:["away"]`，主队留给真人；
+4. 人机对战（机器人服务被动接入）：部署 HTTP 回调接收 `duel_created` 通知（默认地址
+   `https://yakidev.top`，由服务方配置 `BOT_SERVICE_URL` 指向你的服务），收到后经 `join`
+   占用客队席位并自动开局（可运行示例见 `examples/node/bot_server_demo.mjs`）；
+5. 每次行动前先 `state`，仅当 `myTurn===true` 且 `allowedActions` 非空时 `act`；
+6. `act` 失败（`ok:false` + `reason`）时按响应中的 `allowed` 自我纠正；
+7. 轮询间隔建议 ≥1s；比赛结束以 `matchStatus==="ended"` 为准；
+8. 会话结束时调 `leave` 撤销 key；不调也不影响（24h 自动过期）。
 
 ---
 
@@ -170,7 +204,9 @@ ra_client_api/
 │   │   ├── full_lifecycle.sh      # 直播/重播任务：完整生命周期示例
 │   │   └── ai_duel_demo.sh        # AI 对战：自对弈示例
 │   ├── python/task_demo.py        # Python 示例
-│   └── node/task_demo.mjs         # Node.js 示例
+│   └── node/
+│       ├── task_demo.mjs          # 直播/重播任务：Node.js 示例
+│       └── bot_server_demo.mjs    # AI 对战：机器人服务示例（收通知→join→走棋）
 └── skills/
     ├── rollinace-api-client/          # Agent Skill：直播/重播任务 API
     └── rollinace-ai-duel-client/      # Agent Skill：AI 对战接口

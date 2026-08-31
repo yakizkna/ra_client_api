@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+// ============================================================================
+// bot_server_demo.mjs — 机器人服务示例（人机对战：真人主队 vs 机器人客队）
+// ----------------------------------------------------------------------------
+// 流程：
+//   1. 启动本地 HTTP 服务，监听 POST /（根路径）接收 duel_created 通知；
+//   2. 收到通知后经 /api/ai join 占用客队席位（自动开局，客场先攻）；
+//   3. 按 allowedActions 循环 state/act 自行走棋，直至比赛结束。
+//
+// 用法：
+//   AI_AGENT_ID=<agent_id> AI_AGENT_KEY=<agent_key> \
+//     node examples/node/bot_server_demo.mjs
+//
+// 环境变量（可选）：
+//   PORT  监听端口（默认 8080）
+//   BASE  接口基址（默认 https://ace.yakidev.top）
+//
+// 通知地址：默认 https://yakidev.top（服务方通过 BOT_SERVICE_URL 环境变量指向
+// 本服务的公网地址；本示例只实现「收到通知 → join → 走棋」，无鉴权、无重试队列，
+// 生产环境请按需补充。
+// ============================================================================
+
+import http from "node:http";
+
+const BASE = process.env.BASE || "https://ace.yakidev.top";
+const PORT = Number(process.env.PORT || 8080);
+const AGENT_ID = process.env.AI_AGENT_ID;
+const AGENT_KEY = process.env.AI_AGENT_KEY;
+
+if (!AGENT_ID || !AGENT_KEY) {
+  console.error("错误：请设置 AI_AGENT_ID 与 AI_AGENT_KEY（管理端「AI 管理」页分配）");
+  process.exit(1);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** POST /api/ai，返回 JSON 响应体（业务失败为 HTTP 200 + ok:false） */
+async function ai(payload) {
+  const resp = await fetch(`${BASE}/api/ai`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return resp.json();
+}
+
+/** 简单决策：按优先级选操作，保证局面能持续推进 */
+function pickAction(allowed) {
+  const PREF = ["take1B", "roll2", "swing", "read", "roll", "item", "setBS"];
+  return allowed.find((a) => PREF.includes(a)) || allowed[0];
+}
+
+/** 加入对局并循环走棋（每局一个异步任务，互不阻塞） */
+async function playDuel({ liveId, homeName, awayName }) {
+  try {
+    // 1) join：占用客队席位，自动开局（客场先攻）
+    const joined = await ai({
+      action: "join", agentId: AGENT_ID, key: AGENT_KEY,
+      liveId, name: awayName || "AI客队",
+    });
+    if (!joined.ok) {
+      console.log(`[${liveId}] join 失败:`, joined.reason, "—— 稍后重试或跳过");
+      return;
+    }
+    const key = joined.key;
+    console.log(`[${liveId}] 已加入客队 vs ${homeName || "主队"}，开局（客场先攻）`);
+
+    // 2) state/act 循环
+    let guard = 0; // 保险：防止异常局面死循环
+    for (;;) {
+      if (++guard > 2000) { console.log(`[${liveId}] 达到轮询上限，放弃`); break; }
+      const st = await ai({ action: "state", key });
+      if (["ended", "closed"].includes(st.matchStatus)) {
+        console.log(`[${liveId}] 比赛结束，winner=${st.winner || "-"}`);
+        break;
+      }
+      if (!st.myTurn || !st.allowedActions || st.allowedActions.length === 0) {
+        await sleep(1000); // 轮不到我 / 服务端正在自动换边
+        continue;
+      }
+      const op = pickAction(st.allowedActions);
+      const r = await ai({ action: "act", key, op });
+      if (!r.ok) {
+        console.log(`[${liveId}] act 失败:`, r.reason, r.reasonDetail || "", "—— 按 allowed 自我纠正");
+        await sleep(1000);
+        continue;
+      }
+      console.log(`[${liveId}] act=${op}  event=${r.event}  result=${r.result || "-"}  advanced=${r.advanced || "-"}`);
+      await sleep(1000);
+    }
+  } catch (err) {
+    console.error(`[${liveId}] 对局异常:`, (err && err.message) || err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP 服务：接收 duel_created 通知
+// ---------------------------------------------------------------------------
+const server = http.createServer((req, res) => {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, reason: "method_not_allowed" }));
+    return;
+  }
+  let raw = "";
+  req.on("data", (chunk) => (raw += chunk));
+  req.on("end", () => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    try {
+      const payload = JSON.parse(raw || "{}");
+      if (payload.event === "duel_created" && payload.liveId) {
+        console.log(`收到通知：AI 对战房 ${payload.liveId} 已创建，开始加入…`);
+        playDuel(payload); // 异步执行，立即响应
+        res.end(JSON.stringify({ ok: true, liveId: payload.liveId }));
+      } else {
+        res.end(JSON.stringify({ ok: false, reason: "ignored", event: payload.event }));
+      }
+    } catch (err) {
+      res.end(JSON.stringify({ ok: false, reason: "bad_json" }));
+    }
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`机器人服务已启动：监听 POST /，端口 ${PORT}`);
+  console.log(`接口基址：${BASE}/api/ai；agent: ${AGENT_ID}`);
+  console.log(`请将本服务公网地址告知服务方配置为 BOT_SERVICE_URL（默认 https://yakidev.top）`);
+});

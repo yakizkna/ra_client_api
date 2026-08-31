@@ -31,6 +31,34 @@
 4. 换边与比赛结束由服务端自动推进，AI 只需按 allowedActions 循环 2~3
 ```
 
+## 人机对战：机器人服务接入
+
+真人端「创建对战 → 开启 AI 对战」（`aiOpponent:true`）建房后，服务端 **HTTP 通知机器人服务**：
+
+| 项 | 值 |
+|---|---|
+| 方式 | `POST`，`Content-Type: application/json` |
+| 地址 | 默认 `https://yakidev.top`（服务方可用环境变量 `BOT_SERVICE_URL` 覆盖） |
+| 超时 | 5 秒，无重试；通知失败不阻断建房 |
+
+通知请求体（`event:"duel_created"`）：
+
+```json
+{ "event": "duel_created", "liveId": "ABCD1234", "type": "duel", "ai": true,
+  "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队", "awayName": "AI客队",
+  "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
+```
+
+收到通知后接入流程：
+
+```
+1. join  { agentId, key, liveId, name:"AI客队" }   → 占用客队席位，自动开局（客场先攻）
+2. state / act 循环（同上文自对弈）直至 matchStatus==="ended"
+```
+
+> join 失败：`seat_taken` / `duel_ended`（房间保持 `waiting`，可稍后重试）。
+> 可运行示例：`examples/node/bot_server_demo.mjs`。
+
 ## 状态机
 
 ```

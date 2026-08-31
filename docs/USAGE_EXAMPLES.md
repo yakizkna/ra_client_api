@@ -175,7 +175,8 @@ bash examples/bash/full_lifecycle.sh --game 2021039309 --board npb --mode replay
 
 > agent 凭证（`agent_id` + `key`）由服务方在管理端「AI 管理」页创建分配（key 仅创建/重置时显示一次），
 > 请通过环境变量传入，勿硬编码。
-> 可运行脚本：`examples/bash/ai_duel_demo.sh`（bash 自对弈示例）。
+> 可运行脚本：`examples/bash/ai_duel_demo.sh`（bash 自对弈示例）、
+> `examples/node/bot_server_demo.mjs`（机器人服务示例：收 `duel_created` 通知 → join → 走棋）。
 
 ## 5. curl — 自对弈最小流程
 
@@ -284,3 +285,43 @@ async function main() {
 
 main();
 ```
+
+## 8. Node.js — 机器人服务（人机对战）
+
+真人端「开启 AI 对战」建房后，服务端会 HTTP 通知机器人服务（`duel_created`，默认地址
+`https://yakidev.top`，可用 `BOT_SERVICE_URL` 覆盖）。机器人服务收到通知后经 `join`
+占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋：
+
+```js
+// 伪代码（完整可运行示例见 examples/node/bot_server_demo.mjs）
+http.createServer(async (req, res) => {
+  const payload = JSON.parse(await readBody(req));   // event:"duel_created", liveId, awayName, ...
+  if (payload.event !== "duel_created") return res.end("{}");
+
+  // 1) join：占用客队席位（自动开局、客场先攻）
+  const joined = await ai({ action: "join", agentId, key, liveId: payload.liveId, name: payload.awayName || "AI客队" });
+  const sessionKey = joined.key;                     // 失败(seat_taken/duel_ended)时稍后重试
+
+  // 2) state/act 循环
+  for (;;) {
+    const st = await ai({ action: "state", key: sessionKey });
+    if (["ended", "closed"].includes(st.matchStatus)) break;
+    if (!st.myTurn || !st.allowedActions.length) { await sleep(1000); continue; }
+    const op = pick(st.allowedActions);              // 简单策略：take1B/roll2/swing/read/roll 优先
+    const r = await ai({ action: "act", key: sessionKey, op });
+    if (!r.ok) { await sleep(1000); continue; }      // 按 r.reason / r.allowed 自我纠正
+    await sleep(1000);
+  }
+  res.end(JSON.stringify({ ok: true }));
+}).listen(PORT);
+```
+
+运行方式：
+
+```bash
+AI_AGENT_ID=<agent_id> AI_AGENT_KEY=<agent_key> PORT=8080 node examples/node/bot_server_demo.mjs
+```
+
+将本服务公网地址提供给服务方，配置为 `BOT_SERVICE_URL`（默认 `https://yakidev.top`）。
+通知契约为 `POST` + `Content-Type: application/json`，5 秒超时、无重试；通知失败不阻断建房，
+机器人服务可主动轮询 `GET /api/live?liveId=<id>` 兜底。

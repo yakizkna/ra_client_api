@@ -1,6 +1,6 @@
 ---
 name: rollinace-ai-duel-client
-description: 让外部 AI Agent / 服务端策略程序接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入真人创建的对战房（人机对战）、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、保活与退出。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、或需要按局面自动决策并执行比赛动作时，应使用本技能。
+description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入真人创建的对战房（人机对战，含接收 duel_created 通知后自动 join 加入的机器人服务接入）、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、保活与退出。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、或需要按局面自动决策并执行比赛动作时，应使用本技能。
 ---
 
 # Rollin Ace AI 对战接口客户端
@@ -11,6 +11,7 @@ description: 让外部 AI Agent / 服务端策略程序接入 Rollin Ace 棒球�
 
 - 创建 AI 对战房（AI vs AI 自对弈，`create`）；
 - 加入真人创建的对战房（人机对战，`join`）；
+- 部署机器人服务：真人建房开启 AI 对战 → 服务端 HTTP 通知（`duel_created`）→ 收到后自动 `join` 加入客队并走棋；
 - 读取当前完整局面（比分、出局、垒位、当前进攻方、轮到谁、可执行操作，`state`）；
 - 执行比赛操作（掷骰 `roll` / 打 `swing` / 看 `read` / 二选一 `take1B`、`roll2` / 使用技能 `item` / 切换好坏球 `setBS`，`act`）；
 - 以房间身份发送弹幕（`chat`，与真人端共享同一份日志流）；
@@ -71,6 +72,40 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 成功响应返回 `ok:true`、`liveId`、`aiSides`、`matchStatus`、`agentId` 与 `keys`（每席位的 `side`/`key`/`expiresAt`/`uid`/`agentId`）。
 
 > **仅 `aiSides` 同时含 home 与 away 时才立即开局**（客场先攻）；否则 `matchStatus` 为 `waiting`，等真人主队进房初始化。
+
+### 机器人服务接入（人机对战）
+
+真人端「创建对战 → 开启 AI 对战」建房（`aiOpponent:true`）后，服务端会 **HTTP 通知机器人服务**，
+机器人服务收到通知后经 `join` 加入客队并自动开局（客场先攻），随后按 `state`/`act` 循环走棋。
+
+**通知契约（机器人服务需实现一个 HTTP 回调）：**
+
+| 项 | 值 |
+|---|---|
+| 方式 | `POST`，`Content-Type: application/json` |
+| 地址 | 默认 `https://yakidev.top`；服务方可用环境变量 `BOT_SERVICE_URL` 覆盖 |
+| 超时 | 5 秒，无重试；通知失败不阻断建房（可主动轮询 `GET /api/live?liveId=<id>` 兜底） |
+
+请求体（`event:"duel_created"`）：
+
+```json
+{ "event": "duel_created", "liveId": "ABCD1234", "type": "duel", "ai": true,
+  "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队", "awayName": "AI客队",
+  "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
+```
+
+收到通知后接入流程：
+
+```bash
+# 1) join：占用客队席位（自动开局、客场先攻）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
+  "action":"join","agentId":"$AI_AGENT_ID","key":"$AI_AGENT_KEY","liveId":"ABCD1234","name":"AI客队"
+}'
+# 2) 之后按上文 state/act 循环走棋（key 用 join 返回的 session_key）
+```
+
+> join 失败（`seat_taken` / `duel_ended`）时房间保持 `waiting`，可稍后重试。
+> 可运行示例：`examples/node/bot_server_demo.mjs`（收通知 → join → 走棋全流程）。
 
 ### 读取当前局面
 
@@ -144,4 +179,4 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{"action"
 
 ## 完整参考
 
-接口字段、`allowedActions` 推导规则、`situation` 数据结构、错误码速查表见本技能附带的 `references/api_quick_ref.md`；仓库根目录的 `docs/AI_DUEL_API.md` 为完整接口文档，`docs/USAGE_EXAMPLES.md` 与 `examples/` 提供多语言示例。
+接口字段、`allowedActions` 推导规则、`situation` 数据结构、错误码速查表见本技能附带的 `references/api_quick_ref.md`；仓库根目录的 `docs/AI_DUEL_API.md` 为完整接口文档，`docs/USAGE_EXAMPLES.md` 与 `examples/` 提供多语言示例；`examples/node/bot_server_demo.mjs` 提供机器人服务（收通知 → join → 走棋）可运行示例。

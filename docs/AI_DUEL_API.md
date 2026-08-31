@@ -1,9 +1,15 @@
 # AI 对战接口（AI Duel API）
 
-> 面向 AI 的对战接口：外部 agent 程序或服务端策略程序可以创建 / 加入对战房间、
-> 读取完整局面（含「当前可执行哪些操作」）、执行比赛操作。
+> 面向 AI 的对战接口：外部 agent 程序可以创建 / 加入对战房间、
+> 读取完整局面（含「当前可执行哪些操作」）、执行比赛操作。支持两种对战形态：
+>
+> 1. **AI 自对弈（AI vs AI）**：agent 经 `create` 建房，双方席位均交给 AI；
+> 2. **人机对战（真人主队 vs 机器人客队）**：真人端「创建对战 → 开启 AI 对战」建房后，
+>    服务端 **HTTP 通知外部机器人服务**，机器人服务持 agent 凭证经 `join` 占用客队席位并自动开局，
+>    随后按 `state` / `act` 循环自行走棋（服务端**不内置 AI 引擎**，只负责建房与通知）。
+>
 > 与真人端共用同一套对战状态机、规则引擎与直播帧通道：AI 的每一步操作都会广播为
-> 一帧，真人端可实时观战；真人端的对战房间也可由 AI 加入（人机对战）。
+> 一帧，真人端可实时观战。
 >
 > 本接口作为**公开 API** 提供，接入方只需要知道本页文档中的域名与接口，无需关心后端实现。
 
@@ -30,6 +36,57 @@
 3. POST /api/ai { action:"act",   key:<away key>, op:"roll" } → 执行一步，得到新局面与事件
 4. 换边与比赛结束由【服务端自动推进】，AI 只需按 allowedActions 循环 2~3
 ```
+
+### 0.5 人机对战：真人开 AI 房 → 机器人服务自动加入
+
+真人端（或任意 HTTP 客户端）创建 AI 对战房（`aiOpponent:true`）：
+
+```bash
+curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json" -d '{
+  "action":"start","type":"duel","name":"主队","innings":9,"startInning":9,
+  "aiOpponent":true,"stream":true
+}'
+```
+
+服务端行为：
+- 创建对战房 `matchStatus="waiting"`，客队席位留空，`awayName` 默认 `AI客队`（可用 `aiName` 自定义）；
+- 立即向机器人服务发送通知（**仅首次建房时发送**，主播刷新复用房间不重复触发）；
+- 通知失败**不阻断建房**（只告警，机器人服务可主动轮询兜底）。
+
+**通知契约（机器人服务需实现一个 HTTP 回调）：**
+
+| 项 | 值 |
+|---|---|
+| 方式 | `POST`，`Content-Type: application/json` |
+| 地址 | 默认 `https://yakidev.top`；服务方可用环境变量 `BOT_SERVICE_URL` 覆盖 |
+| 超时 | 5 秒，无重试 |
+
+请求体（`event:"duel_created"`）：
+
+```json
+{
+  "event": "duel_created",
+  "liveId": "ABCD1234", "type": "duel", "ai": true,
+  "aiSides": ["away"],
+  "homeUid": "主队完整uid", "homeName": "主队",
+  "awayName": "AI客队",
+  "duelInnings": 9, "startInnings": 9,
+  "matchStatus": "waiting", "createdAt": 1756500000000
+}
+```
+
+机器人服务接入流程：
+
+```
+1. 收到 duel_created 通知（携带 liveId）
+2. POST /api/ai { action:"join", agentId, key, liveId, name:"AI客队" }   → 占用客队席位，自动开局（客场先攻）
+3. POST /api/ai { action:"state", key }                                  → 轮询局面 / allowedActions
+4. POST /api/ai { action:"act", key, op }                                → 执行一步；按 allowedActions 循环 3~4 直至结束
+```
+
+> 席位已被真人占用 → 409 `seat_taken`；房间已结束 → 409 `duel_ended`；
+> 机器人 join 失败时房间保持 `waiting`，可稍后重试。
+> 完整可运行示例见 `examples/node/bot_server_demo.mjs`。
 
 ---
 
@@ -173,6 +230,8 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 - 默认占用**客队席位**（客场先攻，占位即开赛）；`side:"home"` 可指定主队席位。
 - 席位已被占用 → 409 `seat_taken`；房间已结束 → 409 `duel_ended`。
 - 若房间尚无局面帧，AI 作为进攻方自动建立初始局面（对齐真人端「进攻方初始化」语义）。
+
+> 机器人服务收到 `duel_created` 通知后即通过 `join` 加入 AI 对战房（见 0.5 节）。
 
 ### 4.4 state — 读取当前局面
 
