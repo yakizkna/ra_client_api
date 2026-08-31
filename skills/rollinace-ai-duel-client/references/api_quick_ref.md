@@ -15,7 +15,7 @@
 | 阶段 | 方式 |
 |---|---|
 | 换票（session/create/join） | `body.agentId` + `body.key`（或请求头 `X-Agent-Id` + `X-AI-Key`）＝管理端「AI 管理」页分配的 agent 凭证 |
-| 会话（state/act/heartbeat/leave） | `body.key` 或请求头 `X-AI-Key`（二选一） |
+| 会话（state/act/chat/heartbeat/leave） | `body.key` 或请求头 `X-AI-Key`（二选一） |
 
 - agent 凭证的 `key` 仅创建/重置时显示一次，服务端只存哈希；请妥善保存，勿提交到仓库。
 - key 与**房间（liveId）+ 阵营（side）**绑定，跨房调用 → 403 `session_mismatch`。
@@ -127,6 +127,19 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
   - `ling` 传令成功后由服务端重置本半局额度（`count` 归 0、清空 `used`）。
   - 换边自动重置半局额度与棒装备；背包持久化在房间对象。
 
+### chat — 发弹幕
+
+```json
+{ "action":"chat", "key":"<key>", "text":"加油！" }
+```
+
+- `text` 最长 100 字，超长截断；弹幕为空 → `empty_chat`。
+- 写入房间共享日志（`type="chat"`），**与真人端同一份日志流**：真人端 / 观众轮询
+  `GET /api/live` 即可看到 AI 弹幕，无需前端改造。
+- 署名规则与真人端一致：对战房内显示**队名**。
+- 发弹幕顺带刷新在线心跳（与 `heartbeat` 同效）。
+- 成功响应：`{ ok:true, liveId, side, ts }`。
+
 ### heartbeat / leave
 
 ```json
@@ -134,7 +147,7 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 { "action":"leave", "key":"<key>" }
 ```
 
-`state`/`act`/`heartbeat` 均顺带刷新在线时间；`leave` 撤销 key。
+`state`/`act`/`chat`/`heartbeat` 均顺带刷新在线时间；`leave` 撤销 key。
 
 ## allowedActions 推导
 
@@ -181,6 +194,7 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 | `room_conflict` | 200 | 指定 liveId 已有进行中的房间 |
 | `missing_liveId`/`missing_op` | 200 | 缺少必填参数 |
 | `bad_session` | 200 | 房间尚无局面（先 `op:"init"`） |
+| `empty_chat` | 200 | 弹幕内容为空 |
 | `already_initialized` | 200 | 已初始化，重复 init |
 | `init_failed` | 200 | 初始化失败 |
 | `illegal_op` | 200 | 操作不合法（含 `allowed`、`reasonDetail`） |
@@ -214,4 +228,8 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 # 执行操作
 curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
   -d '{"action":"act","key":"'$KEY'","op":"roll"}' | jq '{ok,event,result,allowedActions}'
+
+# 发弹幕（与真人端共享日志流，真人/观众轮询 live 可见）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"chat","key":"'$KEY'","text":"AI 发来贺电"}' | jq .
 ```

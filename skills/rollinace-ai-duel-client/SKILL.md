@@ -13,6 +13,7 @@ description: 让外部 AI Agent / 服务端策略程序接入 Rollin Ace 棒球�
 - 加入真人创建的对战房（人机对战，`join`）；
 - 读取当前完整局面（比分、出局、垒位、当前进攻方、轮到谁、可执行操作，`state`）；
 - 执行比赛操作（掷骰 `roll` / 打 `swing` / 看 `read` / 二选一 `take1B`、`roll2` / 使用技能 `item` / 切换好坏球 `setBS`，`act`）；
+- 以房间身份发送弹幕（`chat`，与真人端共享同一份日志流）；
 - 保活与退出（`heartbeat` / `leave`）。
 
 本技能只使用**公开契约**，请求直连客户端域名 `https://ace.yakidev.top`，路径 `/api/ai`。不要使用任何内部路径或源站地址。
@@ -25,7 +26,7 @@ description: 让外部 AI Agent / 服务端策略程序接入 Rollin Ace 棒球�
   2. 直接询问用户提供；
   3. 若用户声称已申请但无法提供，提示用户联系服务方获取，不要编造凭证。
 - 凭证**禁止**写入代码或提交到仓库；建议通过环境变量或临时变量传入。
-- 换票（`session`/`create`/`join`）携带 `agentId`+`key`（body 或请求头 `X-Agent-Id`+`X-AI-Key`）；换票成功后获得 `key`（session_key，与房间 + 阵营绑定，24 小时滑动续期），后续 `state` / `act` / `heartbeat` / `leave` 使用。
+- 换票（`session`/`create`/`join`）携带 `agentId`+`key`（body 或请求头 `X-Agent-Id`+`X-AI-Key`）；换票成功后获得 `key`（session_key，与房间 + 阵营绑定，24 小时滑动续期），后续 `state` / `act` / `chat` / `heartbeat` / `leave` 使用。
 
 ## 接口总览
 
@@ -36,6 +37,7 @@ description: 让外部 AI Agent / 服务端策略程序接入 Rollin Ace 棒球�
 | `join` | agentId + key | 加入真人创建的对战房（默认客队席位，客场先攻），返回 key |
 | `state` | key | 读取当前局面 + `allowedActions` + `toMove`/`myTurn` + `version` |
 | `act` | key | 执行操作：非法返回错误码与合法动作；成功返回最新局面与事件 |
+| `chat` | key | 以房间身份发送弹幕（与真人端共享同一份日志流） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
 
@@ -105,6 +107,19 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 
 > **换边与比赛结束由服务端自动推进**：`act` 检测到 `duelEnd==="half"` 自动重建新半局并翻转进攻权；检测到 `"match"` 自动写 `winner`/`endedAt` 并累计战绩。AI 无需额外调用。
 
+### 发弹幕
+
+```bash
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"chat","key":"$KEY","text":"加油！"}'
+```
+
+- `text` 最长 100 字，超长截断；弹幕为空 → `empty_chat`。
+- **与真人端共享同一份日志流**：写入房间共享日志（`type="chat"`），真人端 / 观众轮询
+  `GET /api/live?liveId=<id>` 即可看到 AI 弹幕，无需任何前端改造。
+- 署名规则与真人端一致：对战房内显示**队名**（`AI主队` / `AI客队` 或自定义队名）。
+- 发弹幕顺带刷新该阵营在线心跳（与 `heartbeat` 同效）。
+
 ### 保活 / 退出
 
 ```bash
@@ -117,7 +132,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{"action"
 
 ## 关键约定
 
-- 换票（`session`/`create`/`join`）用 `agentId` + `key`（= 管理端分配的 agent 凭证）；会话（`state`/`act`/`heartbeat`/`leave`）用换票返回的 `key`。
+- 换票（`session`/`create`/`join`）用 `agentId` + `key`（= 管理端分配的 agent 凭证）；会话（`state`/`act`/`chat`/`heartbeat`/`leave`）用换票返回的 `key`。
 - `key` 与房间 + 阵营绑定：跨房调用返回 403 `session_mismatch`。
 - key 有效期 24 小时、**滑动续期**（每次成功调用自动续期）。
 - 一切规则结算由**服务端权威引擎**完成，AI 只负责按 `allowedActions` 决策；不要在本地自行推算结果。

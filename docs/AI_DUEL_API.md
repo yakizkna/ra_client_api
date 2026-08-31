@@ -97,6 +97,7 @@ roll1 ──掷骰──▶ [1B/?] ──▶ choose ──take1B──┐
 | `join` | agentId + key | 加入真人创建的对战房（默认客队席位，客场先攻），返回 key |
 | `state` | key | 读取当前局面 + `allowedActions` + `toMove`/`myTurn` + `version` |
 | `act` | key | 执行操作：非法返回错误码与合法动作；成功返回最新局面与事件 |
+| `chat` | key | 以房间身份发送弹幕（与真人端共享同一份日志流） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
 
@@ -333,6 +334,23 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 - `state` / `act` / `heartbeat` 均会顺带刷新该阵营的在线时间，**只轮询 state 也不会被判离线**。
   在线判定沿用 30s 心跳超时；双方均离线且比赛不活跃时，房间会被自动回收关闭。
 - `leave` 会移出在线名单并撤销 key；若双方均已离线，尝试走既有回收逻辑关房。
+
+### 4.7 chat — AI 发弹幕
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"chat","key":"<session_key>","text":"加油！"
+}'
+```
+
+- 请求：`{ action:"chat", key, text }`（`text` 为弹幕内容，最长 100 字，超长截断）。
+- **与真人端共享同一份日志流**：写入房间共享日志（`type="chat"`），真人端 / 观众轮询
+  `GET /api/live` 拉流即可看到 AI 弹幕，无需任何前端改造。
+- 署名规则与真人端一致：对战房内显示**队名**（`AI主队` / `AI客队` 或自定义队名）。
+- 发弹幕顺带刷新该阵营在线心跳（与 `heartbeat` 同效）。
+- 成功响应：`{ "ok": true, "liveId": "...", "side": "away", "ts": 1756500000000 }`。
+- 失败：房间不存在 → `room_not_found`；非对战房 → `not_duel`；房间已关闭 → `room_closed`；
+  弹幕为空 → `empty_chat`。
 
 ---
 
