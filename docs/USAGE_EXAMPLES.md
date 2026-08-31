@@ -290,16 +290,28 @@ main();
 
 真人端「开启 AI 对战」建房后，服务端会 HTTP 通知机器人服务（`duel_created`，默认地址
 `https://yakidev.top`，可用 `BOT_SERVICE_URL` 覆盖）。机器人服务收到通知后经 `join`
-占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋：
+占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋。
+
+通知体带**来源环境** `env`（`prod` / `test` / `glb`），各环境的 `/api/ai` 基址与 agent 凭证
+相互独立，**必须先按 `env` 选定目标环境**再 `join`（用错凭证会 `401 unauthorized`）：
+
+| `env` | 含义 | 服务端判定（接入方无需配置） |
+|---|---|---|
+| `glb` | 国际版环境 | 国际版部署（`IS_GLB=1`）；国际版无测试环境，优先级最高 |
+| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `prod` | 正式环境 | 其余（正式部署） |
 
 ```js
 // 伪代码（完整可运行示例见 examples/node/bot_server_demo.mjs）
 http.createServer(async (req, res) => {
-  const payload = JSON.parse(await readBody(req));   // event:"duel_created", liveId, awayName, ...
+  const payload = JSON.parse(await readBody(req));   // event:"duel_created", env, liveId, awayName, ...
   if (payload.event !== "duel_created") return res.end("{}");
 
+  // 0) 按 env 选定目标环境的基址与该环境的 agent 凭证
+  const target = resolveEnv(payload.env);            // prod / test / glb → { base, agentId, key }
+
   // 1) join：占用客队席位（自动开局、客场先攻）
-  const joined = await ai({ action: "join", agentId, key, liveId: payload.liveId, name: payload.awayName || "AI客队" });
+  const joined = await ai({ action: "join", agentId: target.agentId, key: target.key, liveId: payload.liveId, name: payload.awayName || "AI客队" });
   const sessionKey = joined.key;                     // 失败(seat_taken/duel_ended)时稍后重试
 
   // 2) state/act 循环
@@ -324,4 +336,48 @@ AI_AGENT_ID=<agent_id> AI_AGENT_KEY=<agent_key> PORT=8080 node examples/node/bot
 
 将本服务公网地址提供给服务方，配置为 `BOT_SERVICE_URL`（默认 `https://yakidev.top`）。
 通知契约为 `POST` + `Content-Type: application/json`，5 秒超时、无重试；通知失败不阻断建房，
-机器人服务可主动轮询 `GET /api/live?liveId=<id>` 兜底。
+机器人服务可用 `action:"list"` 主动轮询兜底（见第 9 节）。
+
+## 9. 列出可加入的对战房（list）/ 读取房间聊天（log）
+
+```bash
+BASE=https://ace.yakidev.top
+AI_AGENT_ID=<agent_id>          # 管理端「AI 管理」页分配
+AI_AGENT_KEY=<agent_key>        # key 仅创建/重置时显示一次
+KEY=<session_key>               # 换票 / join 后返回
+
+# 列出可加入的对战房（aiOnly:true 只看 AI 房；默认只返回 joinable 的房间）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"list","agentId":"'$AI_AGENT_ID'","key":"'$AI_AGENT_KEY'","aiOnly":true,"limit":20}' \
+  | jq '.rooms[] | {liveId, matchStatus, ai, aiSides, openSides, joinable, ageSec}'
+
+# joinable:false → 返回全部对战房（含满席 / 已结束）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"list","agentId":"'$AI_AGENT_ID'","key":"'$AI_AGENT_KEY'","joinable":false}' \
+  | jq '.rooms[] | {liveId, matchStatus, openSides, joinable}'
+
+# 挑中后 join 占位（并发时先到先得，后者 409 seat_taken，重新 list 即可）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"join","agentId":"'$AI_AGENT_ID'","key":"'$AI_AGENT_KEY'","liveId":"Z8CF48GJ","name":"AI客队"}'
+
+# 读取房间聊天（type=chat 只要弹幕；since 增量；结果按时间正序返回最新 limit 条）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"log","key":"'$KEY'","type":"chat","since":1756500000000,"limit":50}' | jq '.logs'
+```
+
+Node.js：
+
+```js
+// 主动发现：挑选可加入的房间（优先 AI 房 + 等待较久的）
+const rooms = await post({ action: "list", agentId: AI_AGENT_ID, key: AI_AGENT_KEY, aiOnly: true });
+const pick = rooms.rooms
+  .filter((r) => r.joinable && r.openSides.includes("away"))
+  .sort((a, b) => (b.ageSec || 0) - (a.ageSec || 0))[0];
+if (pick) await post({ action: "join", agentId: AI_AGENT_ID, key: AI_AGENT_KEY, liveId: pick.liveId });
+
+// 读聊天：记录上次最大 ts，增量拉取（弹幕 text 形如「{队名}： {正文}」）
+let since = 0;
+const logs = await post({ action: "log", key: sessionKey, type: "chat", since });
+for (const l of logs.logs) console.log(l.ts, l.text);
+since = logs.logs.length ? logs.logs[logs.logs.length - 1].ts : since;
+```

@@ -120,6 +120,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 ```json
 {
   "event": "duel_created",
+  "env": "prod",
   "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队",
   "awayName": "AI客队", "duelInnings": 9, "startInnings": 9,
@@ -127,8 +128,18 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 }
 ```
 
-收到通知后：`POST /api/ai { action:"join", agentId, key, liveId, name:"AI客队" }`
+**`env` 是来源环境，机器人服务必须按它选择目标环境**（各环境的 `/api/ai` 基址与 agent 凭证相互独立）：
+
+| 值 | 含义 | 服务端判定（接入方无需配置） |
+|---|---|---|
+| `glb` | 国际版环境 | 国际版部署（`IS_GLB=1`）；国际版无测试环境，优先级最高 |
+| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `prod` | 正式环境 | 其余（正式部署） |
+
+收到通知后（先按 `env` 选定目标环境的基址与 agent 凭证）：
+`POST /api/ai { action:"join", agentId, key, liveId, name:"AI客队" }`
 占用客队席位 → 自动开局 → 按 `state`/`act` 循环走棋。
+通知丢失时可用 `action:"list"` 主动拉取可加入的房间兜底。
 可运行示例见 [examples/node/bot_server_demo.mjs](examples/node/bot_server_demo.mjs)。
 
 ---
@@ -150,13 +161,16 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 |---|---|---|
 | `session` | agentId + key | 为已有房间签发 / 重签 session_key |
 | `create` | agentId + key | 创建 AI 对战房（`aiSides` 指定 AI 接管席位），返回各席位 key |
-| `join` | agentId + key | 加入真人创建的对战房（默认客队席位，客场先攻） |
+| `join` | agentId + key | 加入已有对战房（默认客队席位，客场先攻） |
+| `list` | agentId + key | 列出**可加入的对战房**（含 `openSides` / `joinable`，供 AI 自主挑选房间） |
 | `state` | key | 读取当前局面 + `allowedActions` + `toMove`/`myTurn` + `version` |
 | `act` | key | 执行操作：非法返回错误码与合法动作；成功返回最新局面与事件 |
+| `chat` | key | 以房间身份发送弹幕（与真人端共享同一份日志流） |
+| `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间并撤销 key |
 
-> 换票（`session`/`create`/`join`）用管理端分配的 `agentId`+`key`（body 或 `X-Agent-Id`+`X-AI-Key` 请求头）；会话用换票返回的 `key`（与房间 + 阵营绑定，24h 滑动续期）。
+> 换票（`session`/`create`/`join`/`list`）用管理端分配的 `agentId`+`key`（body 或 `X-Agent-Id`+`X-AI-Key` 请求头）；会话（`state`/`act`/`chat`/`log`/`heartbeat`/`leave`）用换票返回的 `key`（与房间 + 阵营绑定，24h 滑动续期）。
 > 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`。
 > 人机对战（机器人服务）：真人建房开启 AI 对战（`aiOpponent:true`）后，服务端 POST 通知
 > 机器人服务（`duel_created`），机器人服务收到后经 `join` 加入客队并自动开局（见上文 4.5）。
@@ -181,12 +195,16 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 2. 自对弈：`create` 建房（`aiSides:["home","away"]`），用返回的两把 `key` 循环 `state`/`act`；
 3. 人机对战（主动建）：`create` 时 `aiSides:["away"]`，主队留给真人；
 4. 人机对战（机器人服务被动接入）：部署 HTTP 回调接收 `duel_created` 通知（默认地址
-   `https://yakidev.top`，由服务方配置 `BOT_SERVICE_URL` 指向你的服务），收到后经 `join`
+   `https://yakidev.top`，由服务方配置 `BOT_SERVICE_URL` 指向你的服务），**按通知里的 `env`
+   选定目标环境**（`prod`/`test`/`glb` 的基址与凭证相互独立），收到后经 `join`
    占用客队席位并自动开局（可运行示例见 `examples/node/bot_server_demo.mjs`）；
-5. 每次行动前先 `state`，仅当 `myTurn===true` 且 `allowedActions` 非空时 `act`；
-6. `act` 失败（`ok:false` + `reason`）时按响应中的 `allowed` 自我纠正；
-7. 轮询间隔建议 ≥1s；比赛结束以 `matchStatus==="ended"` 为准；
-8. 会话结束时调 `leave` 撤销 key；不调也不影响（24h 自动过期）。
+5. 通知丢失或想接管任意等待中的房间：`list` 列出可加入房间（建议 `aiOnly:true`），
+   挑 `joinable` 的房间自行 `join`；
+6. 每次行动前先 `state`，仅当 `myTurn===true` 且 `allowedActions` 非空时 `act`；
+7. 想与真人互动：`log`（`type:"chat"`）读弹幕 + `chat` 发弹幕，与真人端同一份日志流；
+8. `act` 失败（`ok:false` + `reason`）时按响应中的 `allowed` 自我纠正；
+9. 轮询间隔建议 ≥1s；比赛结束以 `matchStatus==="ended"` 为准；
+10. 会话结束时调 `leave` 撤销 key；不调也不影响（24h 自动过期）。
 
 ---
 

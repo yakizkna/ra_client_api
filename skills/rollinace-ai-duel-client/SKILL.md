@@ -1,6 +1,6 @@
 ---
 name: rollinace-ai-duel-client
-description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入真人创建的对战房（人机对战，含接收 duel_created 通知后自动 join 加入的机器人服务接入）、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、保活与退出。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、或需要按局面自动决策并执行比赛动作时，应使用本技能。
+description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入对战房（人机对战，含接收 duel_created 通知后自动 join 加入的机器人服务接入）、列出可加入的对战房、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、收发房间聊天、保活与退出。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、或需要按局面自动决策并执行比赛动作时，应使用本技能。
 ---
 
 # Rollin Ace AI 对战接口客户端
@@ -10,7 +10,9 @@ description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战�
 当用户需要将 AI / 外部策略程序接入「棒球对战房」时使用本技能，典型场景：
 
 - 创建 AI 对战房（AI vs AI 自对弈，`create`）；
-- 加入真人创建的对战房（人机对战，`join`）；
+- 加入对战房（人机对战，`join`）；
+- 主动发现可接管的对局（列出可加入的对战房，`list`）；
+- 读取房间聊天与系统日志（含真人弹幕，`log`，与 `chat` 形成收发闭环）；
 - 部署机器人服务：真人建房开启 AI 对战 → 服务端 HTTP 通知（`duel_created`）→ 收到后自动 `join` 加入客队并走棋；
 - 读取当前完整局面（比分、出局、垒位、当前进攻方、轮到谁、可执行操作，`state`）；
 - 执行比赛操作（掷骰 `roll` / 打 `swing` / 看 `read` / 二选一 `take1B`、`roll2` / 使用技能 `item` / 切换好坏球 `setBS`，`act`）；
@@ -35,10 +37,12 @@ description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战�
 |---|---|---|
 | `session` | agentId + key | 为已有房间签发 / 重签 session_key（side 省略时自动挑空席，先 away 后 home） |
 | `create` | agentId + key | 创建 AI 对战房（`aiSides` 指定由 AI 接管的席位），返回各席位 key |
-| `join` | agentId + key | 加入真人创建的对战房（默认客队席位，客场先攻），返回 key |
+| `join` | agentId + key | 加入已有对战房（默认客队席位，客场先攻），返回 key |
+| `list` | agentId + key | 列出**可加入的对战房**（含 `openSides` / `joinable`，供 AI 自主挑选房间） |
 | `state` | key | 读取当前局面 + `allowedActions` + `toMove`/`myTurn` + `version` |
 | `act` | key | 执行操作：非法返回错误码与合法动作；成功返回最新局面与事件 |
 | `chat` | key | 以房间身份发送弹幕（与真人端共享同一份日志流） |
+| `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
 
@@ -84,28 +88,60 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 |---|---|
 | 方式 | `POST`，`Content-Type: application/json` |
 | 地址 | 默认 `https://yakidev.top`；服务方可用环境变量 `BOT_SERVICE_URL` 覆盖 |
-| 超时 | 5 秒，无重试；通知失败不阻断建房（可主动轮询 `GET /api/live?liveId=<id>` 兜底） |
+| 超时 | 5 秒，无重试；通知失败不阻断建房（可用 `list` 主动轮询兜底） |
 
 请求体（`event:"duel_created"`）：
 
 ```json
-{ "event": "duel_created", "liveId": "ABCD1234", "type": "duel", "ai": true,
+{ "event": "duel_created", "env": "prod",
+  "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队", "awayName": "AI客队",
   "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
 ```
 
+**`env` 是来源环境，机器人服务必须按它选择目标环境**（`/api/ai` 基址与 agent 凭证按环境隔离）：
+
+| 值 | 含义 | 服务端判定（接入方无需配置） |
+|---|---|---|
+| `glb` | 国际版环境 | 国际版部署（服务方 `IS_GLB=1`）；国际版无测试环境，优先级最高 |
+| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `prod` | 正式环境 | 其余（正式部署） |
+
+用错环境的凭证会 `401 unauthorized`，或连到错误的环境。
+
 收到通知后接入流程：
 
 ```bash
-# 1) join：占用客队席位（自动开局、客场先攻）
+# 1) 先按 env 选定目标环境的 BASE 与该环境的 agent 凭证
+# 2) join：占用客队席位（自动开局、客场先攻）
 curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
   "action":"join","agentId":"$AI_AGENT_ID","key":"$AI_AGENT_KEY","liveId":"ABCD1234","name":"AI客队"
 }'
-# 2) 之后按上文 state/act 循环走棋（key 用 join 返回的 session_key）
+# 3) 之后按上文 state/act 循环走棋（key 用 join 返回的 session_key）
 ```
+
+**主动发现（通知丢失 / 想接管任意等待中的房间时）：** 用 `list` 拉取可加入房间，
+自行挑选后 `join`（见下方「列出可加入的对战房」）。
 
 > join 失败（`seat_taken` / `duel_ended`）时房间保持 `waiting`，可稍后重试。
 > 可运行示例：`examples/node/bot_server_demo.mjs`（收通知 → join → 走棋全流程）。
+
+### 列出可加入的对战房（主动发现）
+
+```bash
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
+  "action":"list","agentId":"$AI_AGENT_ID","key":"$AI_AGENT_KEY","aiOnly":true,"limit":20
+}'
+```
+
+- `aiOnly`：`true` 只返回 AI 房（**建议**，避免抢占真人等好友的房间）；`false` 时普通对战房也返回（AI 可「假装玩家」加入）。
+- `joinable`：`false` 返回全部对战房（含满席 / 已结束，`joinable:false`）；默认只返回可加入的。
+- `limit`：返回条数，默认 50、上限 200，按创建时间倒序（新房在前）。
+
+每项含 `openSides`（当前空席 `home`/`away`）、`joinable`、`ai` / `aiSides`、`matchStatus`、`ageSec`
+（创建至今秒数，可用于优先接管等待最久的房间）。挑中后 `join` 占位；
+多机器人并发时先到先得，后者返回 `409 seat_taken`，按 `list` 结果重新挑选即可。
+只读、不修改房间状态，可放心轮询（建议 ≥3s）。
 
 ### 读取当前局面
 
@@ -156,6 +192,20 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 - 署名规则与真人端一致：对战房内显示**队名**（`AI主队` / `AI客队` 或自定义队名）。
 - 发弹幕顺带刷新该阵营在线心跳（与 `heartbeat` 同效）。
 
+### 读取房间聊天（log）
+
+```bash
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
+  "action":"log","key":"$KEY","type":"chat","since":1756500000000,"limit":50
+}'
+```
+
+- `type`：`chat`（只要弹幕）/ `system`（只要系统日志）/ `all`（默认）。
+- `since`：只返回 `ts` **严格大于**该值的条目，用于增量轮询；`limit`：取最新 N 条（默认 50、上限 200），结果保持时间正序。
+- 响应 `logs:[{ ts, type, text }]`；弹幕 `text` 形如 `{队名}： {正文}`，已含署名（按队名前缀即可区分发言方）。
+- 与真人端 `GET /api/live?liveId=<id>` 的 `log` 同源，可据此实现「看到观众说话 → `chat` 回应」的互动闭环。
+- 只读；顺带刷新在线心跳（只挂机读聊天不会被判离线）。
+
 ### 保活 / 退出
 
 ```bash
@@ -168,7 +218,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{"action"
 
 ## 关键约定
 
-- 换票（`session`/`create`/`join`）用 `agentId` + `key`（= 管理端分配的 agent 凭证）；会话（`state`/`act`/`chat`/`heartbeat`/`leave`）用换票返回的 `key`。
+- 换票（`session`/`create`/`join`/`list`）用 `agentId` + `key`（= 管理端分配的 agent 凭证）；会话（`state`/`act`/`chat`/`log`/`heartbeat`/`leave`）用换票返回的 `key`。
 - `key` 与房间 + 阵营绑定：跨房调用返回 403 `session_mismatch`。
 - key 有效期 24 小时、**滑动续期**（每次成功调用自动续期）。
 - 一切规则结算由**服务端权威引擎**完成，AI 只负责按 `allowedActions` 决策；不要在本地自行推算结果。

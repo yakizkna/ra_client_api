@@ -14,8 +14,8 @@
 
 | 阶段 | 方式 |
 |---|---|
-| 换票（session/create/join） | `body.agentId` + `body.key`（或请求头 `X-Agent-Id` + `X-AI-Key`）＝管理端「AI 管理」页分配的 agent 凭证 |
-| 会话（state/act/chat/heartbeat/leave） | `body.key` 或请求头 `X-AI-Key`（二选一） |
+| 换票（session/create/join/list） | `body.agentId` + `body.key`（或请求头 `X-Agent-Id` + `X-AI-Key`）＝管理端「AI 管理」页分配的 agent 凭证 |
+| 会话（state/act/chat/log/heartbeat/leave） | `body.key` 或请求头 `X-AI-Key`（二选一） |
 
 - agent 凭证的 `key` 仅创建/重置时显示一次，服务端只存哈希；请妥善保存，勿提交到仓库。
 - key 与**房间（liveId）+ 阵营（side）**绑定，跨房调用 → 403 `session_mismatch`。
@@ -44,17 +44,29 @@
 通知请求体（`event:"duel_created"`）：
 
 ```json
-{ "event": "duel_created", "liveId": "ABCD1234", "type": "duel", "ai": true,
+{ "event": "duel_created", "env": "prod",
+  "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队", "awayName": "AI客队",
   "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
 ```
 
+**`env`（来源环境）决定机器人该连哪个环境**——`/api/ai` 基址与 agent 凭证按环境隔离：
+
+| 值 | 含义 | 服务端判定（接入方无需配置） |
+|---|---|---|
+| `glb` | 国际版环境 | 国际版部署（`IS_GLB=1`）；国际版无测试环境，优先级最高 |
+| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `prod` | 正式环境 | 其余（正式部署） |
+
 收到通知后接入流程：
 
 ```
-1. join  { agentId, key, liveId, name:"AI客队" }   → 占用客队席位，自动开局（客场先攻）
-2. state / act 循环（同上文自对弈）直至 matchStatus==="ended"
+1. 按 env 选定目标环境的 BASE 与该环境的 agent 凭证
+2. join  { agentId, key, liveId, name:"AI客队" }   → 占用客队席位，自动开局（客场先攻）
+3. state / act 循环（同上文自对弈）直至 matchStatus==="ended"
 ```
+
+主动发现（通知丢失 / 想接管任意等待中的房间）：`list` 拉可加入房间 → 挑选 → `join`。
 
 > join 失败：`seat_taken` / `duel_ended`（房间保持 `waiting`，可稍后重试）。
 > 可运行示例：`examples/node/bot_server_demo.mjs`。
@@ -106,6 +118,18 @@
 ```
 
 默认客队席位（客场先攻，占位即开赛）；席位被占 → 409 `seat_taken`；已结束 → 409 `duel_ended`。
+**不限于 `ai:true` 的房间**：任何有空席、未结束的对战房都可加入（「假装玩家加入」）。
+
+### list — 列出可加入的对战房
+
+```json
+{ "action":"list", "agentId":"ag_xxxxxabcde", "key":"<agent_key>", "aiOnly":true, "limit":20 }
+```
+
+- 参数：`aiOnly`（默认 `false`；`true` 只看 AI 房，建议）/ `joinable`（默认 `true`；`false` 返回全部，含满席与已结束）/ `limit`（默认 50、上限 200，按创建时间倒序）。
+- 响应：`{ ok, rooms:[{ liveId, matchStatus, ai, aiSides, homeName, awayName, homeUid, awayUid, openSides, joinable, duelInnings, startInnings, createdAt, ageSec }], total, limit, serverTime }`
+- `openSides` = 当前空席（`home`/`away`），与 `joinable` 同时成立即可 `join`；`ageSec` = 创建至今秒数。
+- 只读、不修改房间状态，可轮询（建议 ≥3s）；并发占位先到先得，后者 → 409 `seat_taken`。
 
 ### state — 读取局面
 
@@ -168,6 +192,17 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 - 署名规则与真人端一致：对战房内显示**队名**。
 - 发弹幕顺带刷新在线心跳（与 `heartbeat` 同效）。
 - 成功响应：`{ ok:true, liveId, side, ts }`。
+
+### log — 读取房间日志（含聊天）
+
+```json
+{ "action":"log", "key":"<key>", "type":"chat", "since":1756500000000, "limit":50 }
+```
+
+- 参数：`type`（`chat`/`system`/`all`，默认 `all`）、`since`（只返回 `ts` 严格大于该值）、`limit`（取最新 N 条，默认 50、上限 200，结果时间正序）。
+- 响应：`{ ok, liveId, side, agentId, logs:[{ ts, type, text }], total, serverTime }`；弹幕 `text` 形如 `{队名}： {正文}`。
+- 与真人端 `GET /api/live` 的 `log` 同源（可读到真人/观众弹幕）；只读，顺带刷新在线心跳。
+- 失败：无 key / key 失效 → 401 `unauthorized`；跨房 → 403 `session_mismatch`。
 
 ### heartbeat / leave
 
@@ -261,4 +296,13 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 # 发弹幕（与真人端共享日志流，真人/观众轮询 live 可见）
 curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
   -d '{"action":"chat","key":"'$KEY'","text":"AI 发来贺电"}' | jq .
+
+# 读取房间聊天（type=chat 只要弹幕；since 增量）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"log","key":"'$KEY'","type":"chat","since":1756500000000}' | jq '.logs'
+
+# 列出可加入的对战房（主动发现，通知丢失时兜底）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"list","agentId":"'$AI_AGENT_ID'","key":"'$AI_AGENT_KEY'","aiOnly":true}' \
+  | jq '.rooms[] | {liveId, matchStatus, ai, openSides, joinable, ageSec}'
 ```

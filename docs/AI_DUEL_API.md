@@ -50,8 +50,10 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 
 服务端行为：
 - 创建对战房 `matchStatus="waiting"`，客队席位留空，`awayName` 默认 `AI客队`（可用 `aiName` 自定义）；
-- 立即向机器人服务发送通知（**仅首次建房时发送**，主播刷新复用房间不重复触发）；
-- 通知失败**不阻断建房**（只告警，机器人服务可主动轮询兜底）。
+- 立即向机器人服务发送通知（**仅首次建房时发送**，主播刷新复用房间不重复触发），
+  通知体带**来源环境** `env`（`prod` / `test` / `glb`，见下）；
+- 通知失败**不阻断建房**（只告警）；机器人服务可用 `action:"list"` 主动轮询兜底，
+  发现 `joinable` 的房间后自行 `join`（见 [4.3.1](#431-list--列出可加入的对战房)）。
 
 **通知契约（机器人服务需实现一个 HTTP 回调）：**
 
@@ -66,6 +68,7 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 ```json
 {
   "event": "duel_created",
+  "env": "prod",
   "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"],
   "homeUid": "主队完整uid", "homeName": "主队",
@@ -75,10 +78,21 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 }
 ```
 
+**`env`（来源环境，机器人据此选择目标环境）：**
+
+| 值 | 含义 | 判定条件（服务端按部署环境自动给出，接入方无需配置） |
+|---|---|---|
+| `glb` | 国际版环境 | 国际版部署（服务方环境变量 `IS_GLB=1`）。国际版无测试环境，故优先级最高 |
+| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `prod` | 正式环境 | 其余（正式部署） |
+
+三个环境的 `/api/ai` 基址与 agent 凭证各自独立，**机器人服务必须按 `env` 选择对应环境**
+的基址与 agent 凭证去 `join`，否则会用错凭证（`401 unauthorized`）或连到错误的环境。
+
 机器人服务接入流程：
 
 ```
-1. 收到 duel_created 通知（携带 liveId）
+1. 收到 duel_created 通知（携带 liveId + env）→ **按 `env` 选定目标环境**的基址与 agent 凭证
 2. POST /api/ai { action:"join", agentId, key, liveId, name:"AI客队" }   → 占用客队席位，自动开局（客场先攻）
 3. POST /api/ai { action:"state", key }                                  → 轮询局面 / allowedActions
 4. POST /api/ai { action:"act", key, op }                                → 执行一步；按 allowedActions 循环 3~4 直至结束
@@ -87,6 +101,14 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 > 席位已被真人占用 → 409 `seat_taken`；房间已结束 → 409 `duel_ended`；
 > 机器人 join 失败时房间保持 `waiting`，可稍后重试。
 > 完整可运行示例见 `examples/node/bot_server_demo.mjs`。
+
+**主动发现（通知丢失 / 想接管任意等待中的房间时）：**
+
+```
+1. POST /api/ai { action:"list", agentId, key, aiOnly:true }  → 拿到 joinable 房间列表
+2. 自行挑选（优先 ai:true + openSides 含 "away" + 等待较久的房间）
+3. POST /api/ai { action:"join", agentId, key, liveId }       → 占用空席，之后走上面第 2~4 步
+```
 
 ---
 
@@ -151,10 +173,12 @@ roll1 ──掷骰──▶ [1B/?] ──▶ choose ──take1B──┐
 |---|---|---|
 | `session` | agentId + key | 为已有房间签发 / 重签 session_key（side 省略时自动挑空席） |
 | `create` | agentId + key | 创建 AI 对战房（`aiSides` 指定由 AI 接管的席位），返回各席位 key |
-| `join` | agentId + key | 加入真人创建的对战房（默认客队席位，客场先攻），返回 key |
+| `join` | agentId + key | 加入已有对战房（默认客队席位，客场先攻），返回 key |
+| `list` | agentId + key | 列出**可加入的对战房**（含 `openSides` / `joinable`，供 AI 自主挑选房间） |
 | `state` | key | 读取当前局面 + `allowedActions` + `toMove`/`myTurn` + `version` |
 | `act` | key | 执行操作：非法返回错误码与合法动作；成功返回最新局面与事件 |
 | `chat` | key | 以房间身份发送弹幕（与真人端共享同一份日志流） |
+| `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
 
@@ -230,8 +254,74 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 - 默认占用**客队席位**（客场先攻，占位即开赛）；`side:"home"` 可指定主队席位。
 - 席位已被占用 → 409 `seat_taken`；房间已结束 → 409 `duel_ended`。
 - 若房间尚无局面帧，AI 作为进攻方自动建立初始局面（对齐真人端「进攻方初始化」语义）。
+- **不限于 `ai:true` 的房间**：任何有空席、未结束的对战房都可加入（即「假装玩家加入」），
+  是否只接管 AI 房由接入方用 `list` 的 `aiOnly` / `ai` 字段自行决定。
 
 > 机器人服务收到 `duel_created` 通知后即通过 `join` 加入 AI 对战房（见 0.5 节）。
+
+### 4.3.1 list — 列出可加入的对战房
+
+机器人服务**主动发现**可接管的对局（无需依赖建房通知，通知丢失时用它兜底）：
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"list","agentId":"ag_xxxxxabcde","key":"<agent_key>","aiOnly":false,"limit":20
+}'
+```
+
+请求参数：
+
+| 字段 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `agentId` + `key` | 是 | — | 管理端分配的 agent 凭证 |
+| `aiOnly` | 否 | `false` | `true` 只返回 AI 房（`ai:true`）；`false` 时普通对战房同样返回（AI 可「假装玩家」加入真人等待中的房间） |
+| `joinable` | 否 | `true` | `false` 返回全部对战房（含满席 / 进行中 / 已结束，`joinable` 为 `false`） |
+| `limit` | 否 | `50` | 返回条数上限，最大 `200`；按创建时间倒序（新房在前） |
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "rooms": [
+    {
+      "liveId": "Z8CF48GJ",
+      "matchStatus": "waiting",
+      "ai": true,
+      "aiSides": ["away"],
+      "homeName": "主队",
+      "awayName": "AI客队",
+      "homeUid": "a1b2****",
+      "awayUid": null,
+      "openSides": ["away"],
+      "joinable": true,
+      "duelInnings": 9,
+      "startInnings": 9,
+      "createdAt": 1756500000000,
+      "ageSec": 42
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "serverTime": 1756500042000
+}
+```
+
+字段与挑选建议：
+
+| 字段 | 说明 |
+|---|---|
+| `openSides` | 当前空席（`home` / `away`）；为空表示满席 |
+| `joinable` | 未结束且 `openSides` 非空 → 可直接 `join` |
+| `ai` / `aiSides` | 是否 AI 房 / 房主期望由 AI 接管的席位（**建议优先挑 `ai:true` 的房**，避免抢占真人等好友的房间） |
+| `awayUid` / `homeUid` | 脱敏 uid，`null` 即该席位空缺 |
+| `matchStatus` | `waiting`（等对手）/ `live`（进行中）/ `ended`（已结束） |
+| `ageSec` | 房间创建至今秒数（可用于优先接管等待最久 / 最新的房间） |
+
+> - **只读查询**：不修改任何房间状态，可放心轮询（建议 ≥3s 一次）。
+> - **并发占位**：多个机器人同时 `join` 同一空席时先到先得，后者返回 `409 seat_taken`，
+>   按 `list` 结果重新挑选即可。
+> - 已结束与已关闭的房间不会出现在默认结果中。
 
 ### 4.4 state — 读取当前局面
 
@@ -407,10 +497,54 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
   `GET /api/live` 拉流即可看到 AI 弹幕，无需任何前端改造。
 - 署名规则与真人端一致：对战房内显示**队名**（`AI主队` / `AI客队` 或自定义队名）。
 - 发弹幕顺带刷新该阵营在线心跳（与 `heartbeat` 同效）。
+- 想读取房间聊天（含真人弹幕）用 `log`（见 [4.8](#48-log--读取房间日志含聊天)），与 `chat` 配成闭环。
 - 成功响应：`{ "ok": true, "liveId": "...", "side": "away", "ts": 1756500000000 }`。
 - 失败：房间不存在 → `room_not_found`；非对战房 → `not_duel`；房间已关闭 → `room_closed`；
   弹幕为空 → `empty_chat`；命中敏感词 → `blocked_content`（附 `matches` 命中词条，
   应换一种说法重发）。
+
+### 4.8 log — 读取房间日志（含聊天）
+
+读取房间共享日志：**与真人端 `GET /api/live` 的 `log` 字段是同一份数据**，
+既能读真人玩家 / 观众发的弹幕（`type:"chat"`），也能读系统事件（`type:"system"`），
+与 `chat` 配合即可实现「看到观众说话 → 回应」的人机互动闭环。
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"log","key":"<session_key>","type":"chat","since":1756500000000,"limit":50
+}'
+```
+
+请求参数：
+
+| 字段 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `key` | 是 | — | session_key（与 `state` / `chat` 同级，按房间 + 阵营校验） |
+| `type` | 否 | `all` | `chat`（只要弹幕）/ `system`（只要系统日志）/ `all` |
+| `since` | 否 | — | 时间戳（毫秒），**只返回 `ts` 严格大于该值**的条目，用于增量轮询 |
+| `limit` | 否 | `50` | 返回**最新**的 N 条，上限 `200`；结果保持时间正序 |
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "liveId": "B7Z42FFF",
+  "side": "away",
+  "agentId": "ag_xxxxxabcde",
+  "logs": [
+    { "ts": 1756500000000, "type": "system", "text": "AI客队 加入对战，比赛开始" },
+    { "ts": 1756500012000, "type": "chat", "text": "主队： 加油啊机器人！" }
+  ],
+  "total": 2,
+  "serverTime": 1756500015000
+}
+```
+
+- **只读**：不修改局面与房间状态；与 `state` 一样顺带刷新该阵营心跳（只读聊天不会被判离线）。
+- 弹幕格式沿用真人端：`{队名}： {正文}`，`text` 里已含署名（如需区分发言方，按队名前缀判断）。
+- 典型用法：记录上次拿到的最大 `ts`，下次带 `since` 增量拉取；首次可不带 `since` 只取最近 `limit` 条。
+- 失败：无 key / key 失效 → 401 `unauthorized`；key 与其他房间不匹配 → 403 `session_mismatch`。
 
 ---
 
