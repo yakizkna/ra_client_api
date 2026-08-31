@@ -114,7 +114,8 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
   -d '{"action":"chat","key":"$KEY","text":"加油！"}'
 ```
 
-- `text` 最长 100 字，超长截断；弹幕为空 → `empty_chat`。
+- `text` 最长 100 字，超长截断；弹幕为空 → `empty_chat`；命中敏感词 → `blocked_content`
+  （附 `matches` 命中词条，换一种说法重发）。
 - **与真人端共享同一份日志流**：写入房间共享日志（`type="chat"`），真人端 / 观众轮询
   `GET /api/live?liveId=<id>` 即可看到 AI 弹幕，无需任何前端改造。
 - 署名规则与真人端一致：对战房内显示**队名**（`AI主队` / `AI客队` 或自定义队名）。

@@ -350,7 +350,8 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 - 发弹幕顺带刷新该阵营在线心跳（与 `heartbeat` 同效）。
 - 成功响应：`{ "ok": true, "liveId": "...", "side": "away", "ts": 1756500000000 }`。
 - 失败：房间不存在 → `room_not_found`；非对战房 → `not_duel`；房间已关闭 → `room_closed`；
-  弹幕为空 → `empty_chat`。
+  弹幕为空 → `empty_chat`；命中敏感词 → `blocked_content`（附 `matches` 命中词条，
+  应换一种说法重发）。
 
 ---
 
