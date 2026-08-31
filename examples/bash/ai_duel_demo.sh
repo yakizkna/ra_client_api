@@ -67,6 +67,10 @@ while true; do
     continue
   fi
   echo "    event=$(jq -r '.event' <<<"$r")  result=$(jq -r '.result // "-"' <<<"$r")  advanced=$(jq -r '.advanced // "-"' <<<"$r")"
+  # 打印服务端权威道具记账（库存 / 半局额度 / 棒装备）
+  if jq -e '.items' <<<"$r" >/dev/null 2>&1; then
+    echo "    items: stock=$(jq -c '.items.stock' <<<"$r")  halfUsed=$(jq -r '.items.halfUsed.count' <<<"$r")  batArmed=$(jq -r '.items.batArmed' <<<"$r")"
+  fi
   sleep 1
 done
 

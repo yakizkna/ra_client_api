@@ -90,13 +90,18 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 ```
 
 - `op`：`roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init`；
-- `itemId`：`op=item` 时必填（如 `steal`）；
+- `itemId`：`op=item` 时必填（`bat` / `steal` / `sac` / `mist` / `lun` / `ling`）；
 - `bsEnabled`：`op=setBS` 时必填（切换好坏球模式，新打席生效）；
 - `expectVersion`：可选乐观锁，与当前 `version` 不一致时返回 `version_conflict`（防重复提交）。
 
-成功响应返回最新 `situation`、`event`（中文描述）、`result`（如 `2B`/`HR`/`OUT`）、`baseEvents`（结构化跑者事件）、`advanced`（`half` 已自动换边 / `match` 比赛结束 / `null`）。
+成功响应返回最新 `situation`、`event`（中文描述）、`result`（如 `2B`/`HR`/`OUT`）、`baseEvents`（结构化跑者事件）、`advanced`（`half` 已自动换边 / `match` 比赛结束 / `null`）、`items`（本席位最新道具背包记账）。
 
 非法操作**也返回 HTTP 200**：`{ "ok":false, "reason":"illegal_op", "allowed":[...], "reasonDetail":"..." }`——按 `allowed` 自我纠正即可。
+
+**使用道具（`op:"item"`）**：AI 接口无前端，技能次数 / 背包由**服务端权威记账**，
+随 `state` / `act` 响应返回 `items`（`stock` 剩余库存、`halfUsed` 本半局额度、`batArmed` 棒装备、`rules` 契约常量）。
+前置校验失败即拒绝且**不扣库存**（`out_of_stock` / `skills_exhausted` / `already_used`）；引擎 `canUse` 判定不满足 → `condition_failed`。
+`bat` 为被动道具（装备后主骰 1B 自动升级 2B，打席结束自动解除）；`ling` 传令成功后重置本半局额度；换边自动重置。详见 `references/api_quick_ref.md`。
 
 > **换边与比赛结束由服务端自动推进**：`act` 检测到 `duelEnd==="half"` 自动重建新半局并翻转进攻权；检测到 `"match"` 自动写 `winner`/`endedAt` 并累计战绩。AI 无需额外调用。
 
@@ -116,6 +121,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{"action"
 - `key` 与房间 + 阵营绑定：跨房调用返回 403 `session_mismatch`。
 - key 有效期 24 小时、**滑动续期**（每次成功调用自动续期）。
 - 一切规则结算由**服务端权威引擎**完成，AI 只负责按 `allowedActions` 决策；不要在本地自行推算结果。
+- 道具的库存 / 半局额度 / 棒装备由**服务端权威记账**（`state`/`act` 响应中的 `items`），AI 应按 `items` 决策使用，不要本地维护背包。
 - 失败应答统一 `{ "ok":false, "reason":... }`（HTTP 200），仅鉴权类错误为 401/403；以 `ok===true` 判断成功。
 - AI 每一步操作会自动广播一帧，真人端轮询 `GET /api/live?liveId=<id>` 即可同步观战。
 - 服务端按 agent 记录分接口调用量，可在管理端「AI 管理」页查看；请控制轮询频率（建议 ≥1s）。

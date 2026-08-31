@@ -85,7 +85,7 @@
 { "action":"state", "key":"<key>" }
 ```
 
-响应关键字段：`situation`（完整局面）、`toMove`、`myTurn`、`allowedActions`、`version`（乐观锁）、`agentId`、`matchStatus`、`roomStatus`、`duelEnd`、`winner`。
+响应关键字段：`situation`（完整局面）、`toMove`、`myTurn`、`allowedActions`、`version`（乐观锁）、`agentId`、`matchStatus`、`roomStatus`、`duelEnd`、`winner`、`items`（本席位道具背包记账，详见下文「道具记账」）。
 
 ### act — 执行操作
 
@@ -96,14 +96,36 @@
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `op` | 是 | `roll`/`swing`/`read`/`take1B`/`roll2`/`item`/`setBS`/`init` |
-| `itemId` | `op=item` 时 | 道具 id（如 `steal`） |
+| `itemId` | `op=item` 时 | 道具 id（`bat`/`steal`/`sac`/`mist`/`lun`/`ling`） |
 | `bsEnabled` | `op=setBS` 时 | 切换好坏球模式（新打席生效） |
 | `expectVersion` | 否 | 乐观锁，与当前 version 不一致 → `version_conflict` |
 
-成功响应：`{ ok, liveId, side, agentId, op, version, situation, event, result, diceKind, baseEvents, advanced, duelEnd, winner, matchStatus, allowedActions }`
+成功响应：`{ ok, liveId, side, agentId, op, version, situation, event, result, diceKind, baseEvents, advanced, duelEnd, winner, matchStatus, allowedActions, items }`
 
 - `advanced`：`"half"`（已自动换边）/ `"match"`（比赛结束）/ `null`。
+- `items`：本席位最新道具背包记账（每次 `item` 使用后都会刷新）。
 - 非法操作 HTTP 200：`{ ok:false, reason:"illegal_op", allowed:[...], reasonDetail, situation, toMove }`。
+
+### 道具记账（服务端权威，`state`/`act` 响应中的 `items`）
+
+AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `state` / `act` 返回：
+
+```json
+"items": {
+  "stock": {"bat": 3, "steal": 3, "sac": 3, "mist": 3, "lun": 3, "ling": 3},
+  "halfUsed": {"count": 0, "used": []},
+  "batArmed": false,
+  "rules": {"stockPerItem": 3, "skillsPerHalf": 3, "noDuplicatePerHalf": true}
+}
+```
+
+- `stock`：剩余库存，每种 3 个；`halfUsed.count`：本半局已用次数（上限 3）；`halfUsed.used`：本半局已用道具 id 集合；`batArmed`：是否已装备【棒】。
+- `op:"item"` 使用规则：
+  - 前置校验失败即拒绝且**不扣库存**：库存耗尽 → `invalid_item`+`out_of_stock`；半局用满 3 次 → `condition_failed`+`skills_exhausted`；同种本半局已用 → `invalid_item`+`already_used`；未知道具 → `invalid_item`。
+  - 引擎 `canUse` 权威判定不满足（如 `steal` 需一垒有人）→ `condition_failed`，也不扣库存。
+  - `bat` 为被动道具：`op:"item",itemId:"bat"` 即装备，装备期间主骰摇出 1B 自动升级 2B，打席结束自动解除。
+  - `ling` 传令成功后由服务端重置本半局额度（`count` 归 0、清空 `used`）。
+  - 换边自动重置半局额度与棒装备；背包持久化在房间对象。
 
 ### heartbeat / leave
 
@@ -167,7 +189,7 @@
 | `internal` | 500 | 服务端异常 |
 | 引擎透传 | 200 | `not_choose_phase`/`bs_in_progress`/`condition_failed`/`invalid_item`/`invalid_duel_session` |
 
-`reasonDetail` 取值：`match_not_live`（比赛未进行）/ `not_your_turn`（没轮到我）/ `phase_mismatch`（阶段不符）。
+`reasonDetail` 取值：`match_not_live`（比赛未进行）/ `not_your_turn`（没轮到我）/ `phase_mismatch`（阶段不符）/ `out_of_stock`（道具库存耗尽）/ `skills_exhausted`（半局技能次数用满）/ `already_used`（同种道具本半局已用）。
 
 ## 判断成功
 

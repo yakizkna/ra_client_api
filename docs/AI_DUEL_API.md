@@ -210,11 +210,18 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
   "winner": null,
   "innings": {"total": 9, "start": 9},
   "teams": {"home": "AI主队", "away": "AI客队"},
+  "items": {
+    "stock": {"bat": 3, "steal": 3, "sac": 3, "mist": 3, "lun": 3, "ling": 3},
+    "halfUsed": {"count": 0, "used": []},
+    "batArmed": false,
+    "rules": {"stockPerItem": 3, "skillsPerHalf": 3, "noDuplicatePerHalf": true}
+  },
   "serverTime": 1756499123999
 }
 ```
 
 - `version` = 最新帧 `seq`，可用于 `act` 的乐观锁（`expectVersion`）。
+- `items`：本席位的道具背包记账（详见 4.5.1）。
 - `allowedActions` 为空时需结合 `toMove` 判断：轮到对方则等待；`duelEnd==="half"` 时服务端正在自动换边，稍后重试。
 
 ### 4.5 act — 执行操作
@@ -230,7 +237,7 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `op` | 是 | `roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init` |
-| `itemId` | `op=item` 时必填 | 道具 id（如 `steal`）；可用性由引擎权威校验 |
+| `itemId` | `op=item` 时必填 | 道具 id（`bat` / `steal` / `sac` / `mist` / `lun` / `ling`）；可用性由引擎 `canUse` 权威校验 |
 | `bsEnabled` | `op=setBS` 时必填 | 切换好坏球模式（仅新打席生效） |
 | `session` | 否 | AI 自持局面；省略时取房间最新帧（推荐省略） |
 | `expectVersion` | 否 | 乐观锁：仅当与当前 `version` 一致才执行，防重复提交 |
@@ -263,11 +270,15 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
   "duelEnd": null,
   "winner": null,
   "matchStatus": "live",
-  "allowedActions": ["roll", "setBS", "item"]
+  "allowedActions": ["roll", "setBS", "item"],
+  "items": { "stock": {"bat": 3, "steal": 3, "sac": 3, "mist": 3, "lun": 3, "ling": 3},
+             "halfUsed": {"count": 0, "used": []}, "batArmed": false,
+             "rules": {"stockPerItem": 3, "skillsPerHalf": 3, "noDuplicatePerHalf": true} }
 }
 ```
 
 - `advanced`：本次操作的自动推进结果，`"half"`（已自动换边）/ `"match"`（比赛已结束）/ `null`。
+- `items`：本席位最新道具背包记账（每次 `item` 使用后都会刷新）。
 - 操作成功会**自动广播**一帧：真人端轮询 `GET /api/live?liveId=<id>` 即可同步（AI 与真人共用同一条帧通道）。
 
 非法操作响应（HTTP 200，便于统一解析）：
@@ -278,6 +289,37 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
   "reasonDetail": "phase_mismatch",
   "situation": { "...": "当前局面" }, "toMove": "away" }
 ```
+
+### 4.5.1 道具记账（服务端权威）
+
+真人端技能次数 / 背包由前端维护；**AI 接口无前端，由服务端权威记账**，并随
+`state` / `act` 响应返回 `items` 背包：
+
+| 字段 | 说明 |
+|---|---|
+| `stock` | 本席位剩余库存，每种道具 3 个（对齐道具商店抽奖库存） |
+| `halfUsed.count` | 本半局已用技能次数，上限 3（`skillsPerHalf`） |
+| `halfUsed.used` | 本半局已用过的道具 id 集合（同种不重复） |
+| `batArmed` | 是否已装备【棒】（本打席安打自动升级） |
+| `rules` | 契约常量：`stockPerItem` / `skillsPerHalf` / `noDuplicatePerHalf` |
+
+使用规则（`op:"item"`）：
+
+- 前置校验失败即拒绝，**不扣库存**，且响应携带最新 `items`：
+  - 库存耗尽 → `invalid_item` + `reasonDetail:"out_of_stock"`
+  - 半局额度用满（已用 3 次）→ `condition_failed` + `reasonDetail:"skills_exhausted"`
+  - 同种道具本半局已用过 → `invalid_item` + `reasonDetail:"already_used"`
+  - 未知道具 id → `invalid_item`
+- 通过前置校验后交给引擎 `canUse` 权威判定（如 `steal` 需一垒有人）：
+  条件不满足 → `condition_failed`（同样不扣库存）。
+- **【棒】`bat`**：被动道具，不调引擎掷骰，`op:"item",itemId:"bat"` 即装备
+  （`itemType:"passive"`、`batArmed:true`、库存-1、计入半局额度）。
+  装备期间后续 `roll` / `swing` / `take1B` 主骰摇出 1B 自动升级 2B；
+  打席结束（`plate` 变 false）后自动解除装备。
+- **【令】`ling`**：正常占用 1 次额度；掷骰「传令成功」后由服务端直接重置本半局
+  额度（`count` 归 0、清空 `used`），等价前端「重置技能次数」语义。
+- **换边自动重置**：半局结束服务端自动换边时，双方半局额度与棒装备一并重置。
+- 背包状态持久化在房间对象，重启 / 机器人离线重连后仍保持一致。
 
 ### 4.6 heartbeat / leave
 
@@ -356,7 +398,8 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `internal` | 500 | 服务端异常 |
 | 引擎透传 | 200 | `not_choose_phase` / `bs_in_progress` / `condition_failed` / `invalid_item` / `invalid_duel_session` |
 
-> `reasonDetail` 取值：`match_not_live`（比赛未进行）/ `not_your_turn`（没轮到我）/ `phase_mismatch`（阶段不符）。
+> `reasonDetail` 取值：`match_not_live`（比赛未进行）/ `not_your_turn`（没轮到我）/ `phase_mismatch`（阶段不符）/
+> `out_of_stock`（道具库存耗尽）/ `skills_exhausted`（半局技能次数用满）/ `already_used`（同种道具本半局已用）。
 
 > **判断成功以 `ok === true` 为准**（业务失败多为 HTTP 200 + `ok:false` + `reason`），不要只看 HTTP 状态码。
 
