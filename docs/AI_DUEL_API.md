@@ -161,8 +161,13 @@ roll1 ──掷骰──▶ [1B/?] ──▶ choose ──take1B──┐
 ```
 
 - 开局：客场先攻（`attackerSide="away"`），由进攻方建立初始局面。
-- **换边与比赛结束由服务端自动推进**：`act` 检测到 `duelEnd==="half"` 自动重建新半局并翻转进攻权；
-  检测到 `duelEnd==="match"` 自动写 `winner`/`endedAt` 并累计双方战绩。AI 无需额外调用。
+- **换边与比赛结束由服务端自动推进**：
+  - AI 自己 `act` 打完半局（`duelEnd==="half"`）→ 服务端在 `act` 内自动重建新半局并翻转进攻权；
+  - **人机对战**中真人打完半局后，由真人端 `switchAttack` 切权：此时局面帧仍停在对方半局结束态
+    （`attackerSide` 滞后），AI 应依据 `state` 返回的 `toMove`（以房间权威 `attackerUid` 为准）判断
+    是否轮到自己；若 `toMove===mySide` 且 `allowedActions` 含 `duelHalfStart`，AI 需调
+    `act { op:"duelHalfStart" }` 初始化新半局（重建局面并翻转进攻权），比赛才能继续。
+  - 检测到 `duelEnd==="match"` 自动写 `winner`/`endedAt` 并累计双方战绩。
 - 局数打满平分进入延长赛（0 出局、一、二垒有人），由引擎处理。
 
 ---
@@ -372,7 +377,9 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 
 - `version` = 最新帧 `seq`，可用于 `act` 的乐观锁（`expectVersion`）。
 - `items`：本席位的道具背包记账（详见 4.5.1）。
-- `allowedActions` 为空时需结合 `toMove` 判断：轮到对方则等待；`duelEnd==="half"` 时服务端正在自动换边，稍后重试。
+- `allowedActions` 为空时需结合 `toMove` 判断：轮到对方则等待；
+  `duelEnd==="half"` 且 `toMove===mySide` 时应执行 `act { op:"duelHalfStart" }` 初始化新半局
+  （人机对战真人半局结束后的换边接力）；`toMove!==mySide` 则等待对方处理。
 
 ### 4.5 act — 执行操作
 
@@ -386,7 +393,7 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `op` | 是 | `roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init` |
+| `op` | 是 | `roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init` / `duelHalfStart` |
 | `itemId` | `op=item` 时必填 | 道具 id（`bat` / `steal` / `sac` / `mist` / `lun` / `ling`）；可用性由引擎 `canUse` 权威校验 |
 | `bsEnabled` | `op=setBS` 时必填 | 切换好坏球模式（仅新打席生效） |
 | `session` | 否 | AI 自持局面；省略时取房间最新帧（推荐省略） |
@@ -402,6 +409,7 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `item` | 使用技能/道具 | 需 `itemId` |
 | `setBS` | 切换好坏球 | 新打席生效 |
 | `init` | 建立初始局面 | 房间尚无局面时由进攻方建立（幂等：已有局面则报 `already_initialized`） |
+| `duelHalfStart` | 初始化新半局 | 半局结束（`duelEnd==="half"`）且房间 `attackerUid` 已切到我方时，由新攻击方初始化新半局（人机对战换边接力） |
 
 成功响应：
 

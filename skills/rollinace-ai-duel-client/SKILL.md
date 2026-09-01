@@ -152,7 +152,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 
 响应含 `situation`（完整局面）、`toMove`（当前进攻方）、`myTurn`（是否轮到我）、`allowedActions`（当前可执行操作）、`version`（最新帧序号，乐观锁用）、`agentId`、`matchStatus`、`roomStatus`、`winner` 等。
 
-**判断是否该行动**：`matchStatus==="live"` 且 `myTurn===true` 且 `allowedActions` 非空时才执行 `act`。`allowedActions` 为空且轮不到我 → 等待；`duelEnd==="half"` → 服务端正在自动换边，稍后重试。
+**判断是否该行动**：`matchStatus==="live"` 且 `myTurn===true` 且 `allowedActions` 非空时才执行 `act`。`allowedActions` 为空且轮不到我 → 等待；`duelEnd==="half"` 且 `toMove===mySide` → 执行 `act { op:"duelHalfStart" }` 初始化新半局（人机对战真人半局结束后的换边接力）；`toMove!==mySide` 则等待对方处理。
 
 ### 执行操作
 
@@ -162,7 +162,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 }'
 ```
 
-- `op`：`roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init`；
+- `op`：`roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init` / `duelHalfStart`；
 - `itemId`：`op=item` 时必填（`bat` / `steal` / `sac` / `mist` / `lun` / `ling`）；
 - `bsEnabled`：`op=setBS` 时必填（切换好坏球模式，新打席生效）；
 - `expectVersion`：可选乐观锁，与当前 `version` 不一致时返回 `version_conflict`（防重复提交）。
@@ -176,7 +176,11 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 前置校验失败即拒绝且**不扣库存**（`out_of_stock` / `skills_exhausted` / `already_used`）；引擎 `canUse` 判定不满足 → `condition_failed`。
 `bat` 为被动道具（装备后主骰 1B 自动升级 2B，打席结束自动解除）；`ling` 传令成功后重置本半局额度；换边自动重置。详见 `references/api_quick_ref.md`。
 
-> **换边与比赛结束由服务端自动推进**：`act` 检测到 `duelEnd==="half"` 自动重建新半局并翻转进攻权；检测到 `"match"` 自动写 `winner`/`endedAt` 并累计战绩。AI 无需额外调用。
+> **换边与比赛结束由服务端自动推进**：AI 自己 `act` 打完半局（`duelEnd==="half"`）→ 服务端在 `act` 内自动重建新半局并翻转进攻权；
+> **人机对战**中真人打完半局后由真人端 `switchAttack` 切权：此时局面帧仍停在对方半局结束态（`attackerSide` 滞后），
+> AI 应依据 `state` 返回的 `toMove`（以房间权威 `attackerUid` 为准）判断：若 `toMove===mySide` 且 `allowedActions` 含
+> `duelHalfStart`，调 `act { op:"duelHalfStart" }` 初始化新半局（重建局面并翻转进攻权），比赛才能继续。
+> 检测到 `"match"` 自动写 `winner`/`endedAt` 并累计战绩。
 
 ### 发弹幕
 

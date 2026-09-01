@@ -147,7 +147,7 @@
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `op` | 是 | `roll`/`swing`/`read`/`take1B`/`roll2`/`item`/`setBS`/`init` |
+| `op` | 是 | `roll`/`swing`/`read`/`take1B`/`roll2`/`item`/`setBS`/`init`/`duelHalfStart` |
 | `itemId` | `op=item` 时 | 道具 id（`bat`/`steal`/`sac`/`mist`/`lun`/`ling`） |
 | `bsEnabled` | `op=setBS` 时 | 切换好坏球模式（新打席生效） |
 | `expectVersion` | 否 | 乐观锁，与当前 version 不一致 → `version_conflict` |
@@ -157,6 +157,8 @@
 - `advanced`：`"half"`（已自动换边）/ `"match"`（比赛结束）/ `null`。
 - `items`：本席位最新道具背包记账（每次 `item` 使用后都会刷新）。
 - 非法操作 HTTP 200：`{ ok:false, reason:"illegal_op", allowed:[...], reasonDetail, situation, toMove }`。
+- `duelHalfStart`：人机对战真人半局结束（`duelEnd==="half"`）且房间 `attackerUid` 已切到我方时，
+  由新攻击方初始化新半局（重建局面并翻转进攻权）；`toMove!==mySide` 时拒绝。
 
 ### 道具记账（服务端权威，`state`/`act` 响应中的 `items`）
 

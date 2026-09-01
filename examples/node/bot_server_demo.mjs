@@ -107,8 +107,26 @@ async function playDuel({ liveId, homeName, awayName }, target) {
         console.log(`[${liveId}] 比赛结束，winner=${st.winner || "-"}`);
         break;
       }
-      if (!st.myTurn || !st.allowedActions || st.allowedActions.length === 0) {
-        await sleep(1000); // 轮不到我 / 服务端正在自动换边
+      if (!st.myTurn) {
+        await sleep(1000); // 轮不到我
+        continue;
+      }
+      // 人机对战：真人半局结束（switchAttack 切权）后局面帧可能仍停在半局结束态，
+      // 此时 allowedActions 可能为空但轮到我了（duelEnd==="half" 且 toMove===mySide）——
+      // 需由新攻击方 act { op:"duelHalfStart" } 初始化新半局，比赛才能继续。
+      if (st.duelEnd === "half" && st.allowedActions && st.allowedActions.includes("duelHalfStart")) {
+        const r = await call({ action: "act", key, op: "duelHalfStart" });
+        if (!r.ok) {
+          console.log(`[${liveId}] duelHalfStart 失败:`, r.reason, r.reasonDetail || "");
+          await sleep(1000);
+          continue;
+        }
+        console.log(`[${liveId}] act=duelHalfStart  advanced=${r.advanced || "-"} —— 初始化新半局`);
+        await sleep(1000);
+        continue;
+      }
+      if (!st.allowedActions || st.allowedActions.length === 0) {
+        await sleep(1000); // 非半局结束态但暂时无可用操作
         continue;
       }
       const op = pickAction(st.allowedActions);

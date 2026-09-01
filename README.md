@@ -101,6 +101,8 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 ```
 
 > 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`。
+> 人机对战中真人打完半局后由真人端切权，AI 需依据 `state` 的 `toMove`：若 `toMove===mySide`
+> 且 `allowedActions` 含 `duelHalfStart`，调 `act { op:"duelHalfStart" }` 初始化新半局。
 > 完整说明见 [docs/AI_DUEL_API.md](docs/AI_DUEL_API.md)。
 
 ### 4.5 机器人服务接入（人机对战）
@@ -171,7 +173,8 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 | `leave` | key | 退出房间并撤销 key |
 
 > 换票（`session`/`create`/`join`/`list`）用管理端分配的 `agentId`+`key`（body 或 `X-Agent-Id`+`X-AI-Key` 请求头）；会话（`state`/`act`/`chat`/`log`/`heartbeat`/`leave`）用换票返回的 `key`（与房间 + 阵营绑定，24h 滑动续期）。
-> 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`。
+> 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`；人机对战真人半局结束后
+> AI 需在 `toMove===mySide` 且 `allowedActions` 含 `duelHalfStart` 时执行 `act { op:"duelHalfStart" }` 接力换边。
 > 人机对战（机器人服务）：真人建房开启 AI 对战（`aiOpponent:true`）后，服务端 POST 通知
 > 机器人服务（`duel_created`），机器人服务收到后经 `join` 加入客队并自动开局（见上文 4.5）。
 > 完整说明见 [docs/AI_DUEL_API.md](docs/AI_DUEL_API.md)。
