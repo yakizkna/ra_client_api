@@ -136,7 +136,9 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 - 机器人服务收到后应**停止该房间的走棋**并释放会话资源（后续 `state` 会返回 `room_closed`）；
   通知丢失时以 `action:"state"` 返回的 `roomStatus:"closed"` 兜底感知。
 - 房间关闭对**所有**在房用户生效：真人对手与观众通过 `GET /api/live` 轮询感知
-  （`closed:true` + 包装后的 `closedMessage` 提示，如「对战对手已退出，房间已关闭」）。
+  （`closed:true` + 包装后的 `closedMessage` 提示）。`closedMessage` 区分两类关键场景：
+  - **比赛中途关房**（`matchStatus` 非 `ended`）→ 如「玩家 XX 已离开，房间关闭」（XX 为离开方队名）；
+  - **比赛结束后关房**（`matchStatus=="ended"`）→ 收尾性质，统一提示「房间已关闭」。
 
 **`env`（来源环境，机器人据此选择目标环境）：**
 
