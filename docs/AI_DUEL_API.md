@@ -174,6 +174,30 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 3. POST /api/ai { action:"join", agentId, key, liveId }       → 占用空席，之后走上面第 2~4 步
 ```
 
+### 0.6 会话请求可选字段：rtt（网络质量上报，推荐）
+
+人机对战中，真人端会展示「网络状态」面板（帧进度 / 写读差 / **端到端时延估算**）。
+该估算需要**双方**的实测链路往返数据；AI 端没有浏览器轮询、也不走真人端的读戳通道，
+因此由机器人服务在每次**会话请求**（`state` / `act` / `heartbeat` / `chat` / `log` /
+`leave`，即携带 `key` 的接口）请求体里带一个**可选字段 `rtt`** 即可：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `rtt` | number（毫秒），可选 | 机器人服务本端实测的往返耗时：从发起本次会话请求到收到完整响应的时长。建议取整毫秒，且只统计**成功**请求（重试期间不计）；未测到 / 首次请求可不带（服务端忽略非正数）。 |
+
+```json
+{ "action":"act", "key":"<key>", "op":"roll", "rtt":36 }
+```
+
+服务端收到后（均静默处理，失败不影响主流程）：
+- 把该 RTT 写入房间网络戳，供真人端做端到端时延估算
+  （≈ `AI RTT/2 + 存储端写读差 + 真人 RTT/2`），即「AI 决定动作 → 真人端看到」的近似滞后；
+- 在 `state` / `act` 拉到最新帧后自动为 AI 补打一次**读戳**（语义 = AI 已读到该帧），
+  使真人端「对方读帧 / 写读差 / 对方停滞」从「AI 无读戳」占位变为真实值。
+- 读戳与写戳的时钟都在存储端，接入方无需处理时间同步，照常调用即可。
+
+> AI 自对弈房（AI vs AI）没有真人端展示此面板，带不带无影响；统一带上无需区分房间类型。
+
 ---
 
 ## 一、鉴权
@@ -396,8 +420,9 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 ### 4.4 state — 读取当前局面
 
 ```bash
+# rtt 可选：本端实测往返 ms（网络质量上报，见 0.6）；未测到可不带
 curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" \
-  -d '{"action":"state","key":"<session_key>"}'
+  -d '{"action":"state","key":"<session_key>","rtt":35}'
 ```
 
 响应：
@@ -463,6 +488,7 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `bsEnabled` | `op=setBS` 时必填 | 切换好坏球模式（仅新打席生效） |
 | `session` | 否 | AI 自持局面；省略时取房间最新帧（推荐省略） |
 | `expectVersion` | 否 | 乐观锁：仅当与当前 `version` 一致才执行，防重复提交 |
+| `rtt` | 否 | 本端实测往返 ms（网络质量上报，见 [0.6](#06-会话请求可选字段rtt网络质量上报推荐)） |
 
 操作与引擎参数的映射（结算**始终**由服务端权威引擎完成）：
 
@@ -547,8 +573,8 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 ### 4.6 heartbeat / leave
 
 ```bash
-# 保活
-curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{"action":"heartbeat","key":"<key>"}'
+# 保活（rtt 可选，见 0.6；保活请求同样可携带）
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{"action":"heartbeat","key":"<key>","rtt":35}'
 # 退出
 curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{"action":"leave","key":"<key>"}'
 ```
