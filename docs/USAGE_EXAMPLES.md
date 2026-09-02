@@ -289,8 +289,9 @@ main();
 ## 8. Node.js — 机器人服务（人机对战）
 
 机器人服务需处理两类服务端回调（同一地址 `BOT_SERVICE_URL`，默认 `https://yakidev.top`）：
-- **`check`（能力查询）**：真人端勾选「AI 对战」开关时发起，返回 `{ canCreate }`；
-  返回不可用 / 超时 / 非 2xx 时前端会提示「暂时无法 AI 对战」并回滚勾选（fail-closed）。
+- **`check`（能力查询）**：真人端勾选「AI 对战」开关时发起，返回 `{ canCreate, reason?, message? }`
+  （`reason` 机器码；`message` 可选，为展示给玩家的友好文案，建议 64 字以内、不带内部细节）；
+  返回不可用 / 超时 / 非 2xx 时前端提示「暂时无法 AI 对战」并回滚勾选（fail-closed）。
 - **`duel_created`（建房通知）**：AI 对战房已创建，机器人服务收到后经 `join`
   占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋。
 
@@ -308,9 +309,14 @@ main();
 http.createServer(async (req, res) => {
   const payload = JSON.parse(await readBody(req));   // event:"check" | "duel_created"
   if (payload.event === "check") {
-    // 能力查询：按 env 判断该环境能否提供对局服务
+    // 能力查询：按 env 判断该环境能否提供对局服务。
+    // reason 用机器码；message 给玩家可读文案（不带环境名/凭证等内部细节）。
     const target = resolveEnv(payload.env);
-    return res.end(JSON.stringify({ canCreate: Boolean(target && target.agentId && target.key) }));
+    if (target && target.agentId && target.key) return res.end(JSON.stringify({ canCreate: true }));
+    return res.end(JSON.stringify({
+      canCreate: false, reason: "maintenance",
+      message: "AI 服务暂时不可用，请稍后再试",
+    }));
   }
   if (payload.event !== "duel_created") return res.end("{}");
 
@@ -404,7 +410,10 @@ AI_ADMIN_KEY=<admin_agent_key>
 curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
   -d '{"action":"close","agentId":"'$AI_ADMIN_ID'","key":"'$AI_ADMIN_KEY'","liveId":"Z8CF48GJ","reason":"no_activity"}' \
   | jq .
-# → { "ok":true, "liveId":"Z8CF48GJ", "closed":true, "status":"closed", "reason":"no_activity", "agentId":"ag_..." }
+# → { "ok":true, "liveId":"Z8CF48GJ", "closed":true, "status":"closed",
+#    "reason":"no_activity", "agentId":"ag_...", "message":"对战房间已关闭" }
+# 已关闭（幂等，含因超时被自动关闭）→ closed:false + message:"对战房间已处于关闭状态（无需重复关闭）"。
+# 展示给玩家时请用 message，不要拼接 reason / status 等后台字段。
 ```
 
 Node.js（巡检示例：每 60s 关闭超过 10 分钟无行为的 AI 对战房）：

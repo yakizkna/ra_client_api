@@ -153,11 +153,14 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 // 请求体
 { "event": "check", "env": "pro", "ts": 1756500000000 }
 // 期望响应（HTTP 200，JSON）
-{ "canCreate": true }   // 或 { "canCreate": false, "reason": "机器人维护中" }
+{ "canCreate": true }   // 或 { "canCreate": false, "reason": "maintenance", "message": "机器人维护中，请稍后再试" }
 ```
 
-返回不可用（`canCreate:false` / 超时 / 非 2xx）时前端会提示「暂时无法 AI 对战」并回滚勾选，
-避免建房后机器人不加入导致房间永远 `waiting`（fail-closed）。
+- `reason` 是机器码（区分场景）；`message` 可选，是**展示给玩家的友好文案**（建议 64 字以内，
+  不要携带内部技术细节 / 环境名 / 凭证信息）。
+- 返回不可用（`canCreate:false` / 超时 / 非 2xx）时前端提示「暂时无法 AI 对战」并回滚勾选，
+  避免建房后机器人不加入导致房间永远 `waiting`（fail-closed）。前端只展示服务端包装好的
+  `message`，机器人平台返回的原始 `reason` 仅作诊断，不会直接展示给玩家。
 
 ---
 

@@ -224,7 +224,9 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 
 - 仅 `role:"admin"` 的管理员 agent 可调（创建 agent 时角色选「管理员」）；按 `liveId` 直接关闭，无需 session_key。
 - `reason` 可选（默认 `bot_close`，最长 32 字符，供服务方管理端审计）。
-- 响应：`{ ok, liveId, closed, status:"closed", reason, agentId }`；`closed:true` 本次实际关闭，`false` 幂等（已关闭/不存在）。
+- 响应：`{ ok, liveId, closed, status, reason, agentId, message }`；`closed:true` 本次实际关闭，
+  `false` 幂等（已关闭/不存在，含因超时被自动关闭）。
+- **展示用 `message`**（如「对战房间已关闭」），勿把 `reason`/`status` 后台字段直接展示给玩家。
 - 非管理员 → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
 - 场景：机器人平台定时巡检，检测到房间无行为 / 需要关停时回收（区别于 `leave`：无需 session_key，可关任意房间）。
 

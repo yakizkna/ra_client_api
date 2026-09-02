@@ -88,9 +88,10 @@ async function ai(payload, target) {
 async function checkCanCreate(payload) {
   const env = payload.env;
   const target = ENVS[env];
-  if (target && target.agentId && target.key) return true;
+  if (target && target.agentId && target.key) return { canCreate: true };
   console.warn(`[check] env=${env || "-"} 未配置该环境 agent 凭证 → canCreate:false`);
-  return false;
+  // reason 用机器码；message 是展示给玩家的友好文案（勿携带环境名/凭证等内部细节）
+  return { canCreate: false, reason: "maintenance", message: "AI 服务暂时不可用，请稍后再试" };
 }
 
 /** 简单决策：按优先级选操作，保证局面能持续推进 */
@@ -213,9 +214,9 @@ const server = http.createServer((req, res) => {
       if (payload.event === "check") {
         // 能力查询：真人端勾选「AI 对战」开关时服务端发起。
         // 返回 canCreate:false（或非 2xx / 超时）时前端会提示「暂时无法 AI 对战」并回滚勾选。
-        const canCreate = await checkCanCreate(payload);
-        console.log(`能力查询：event=check env=${payload.env || "-"} → canCreate=${canCreate}`);
-        res.end(JSON.stringify({ canCreate }));
+        const check = await checkCanCreate(payload);
+        console.log(`能力查询：event=check env=${payload.env || "-"} → canCreate=${check.canCreate}`);
+        res.end(JSON.stringify(check));
       } else if (payload.event === "duel_created" && payload.liveId) {
         // 通知体带来源环境 env（pro/tst/glb）：各环境基址与凭证独立，按 env 选择目标环境
         const env = resolveEnv(payload.env);

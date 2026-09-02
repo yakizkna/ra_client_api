@@ -92,16 +92,29 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 { "event": "check", "env": "pro", "ts": 1756500000000 }
 
 // 期望响应（HTTP 200，JSON）
-{ "canCreate": true }                 // 或 { "canCreate": false, "reason": "机器人维护中" }
+{ "canCreate": true }   // 或 { "canCreate": false, "reason": "maintenance", "message": "机器人维护中，请稍后再试" }
 ```
 
+- `reason`（机器码，用于区分场景）；`message`（可选，**展示给玩家的友好文案**，建议 64 字以内，
+  不要携带内部技术细节 / 环境名 / 凭证信息）。
 - `canCreate:true` → 前端允许勾选；`false` / 非 2xx / 超时 / 响应非 JSON → 视为**不可用**，
-  前端提示「AI 服务暂时不可用，暂时无法进行 AI 对战」（附 `reason`），并回滚勾选。
-- `reason`（可选，`canCreate:false` 时建议带上）：**机器人服务返回的自由文本**（不可用原因），
-  前端会原样附在提示语中；取值由机器人自定，如「并发已满，暂时无法提供服务」「未配置该环境 agent 凭证」
-  「维护中」等，建议 ≤64 字符。`canCreate:true` 时无需返回。
+  前端提示「AI 服务暂时不可用，暂时无法进行 AI 对战」并回滚勾选。
 - 语义上采取 **fail-closed**：无法确认机器人可服务时一律按不可用处理，
   避免建房后机器人不加入导致房间永远 `waiting`。
+
+服务端 `check_ai` 响应对前端做了**提示包装**：
+
+```json
+{ "ok": true, "canCreate": false, "available": false,
+  "reason": "ai_service_unavailable",          // 机器可读状态码
+  "message": "AI 服务暂时不可用，请稍后再试",     // 展示给玩家的友好文案
+  "reasonDetail": "maintenance",               // 机器人平台返回的原始 reason，仅供诊断，前端不展示
+  "serverTime": 1756500000000 }
+```
+
+- `reason` 固定为机器码（不可用时 `ai_service_unavailable`）；`message` 优先取机器人平台返回的
+  `message`，缺失时用通用文案；机器人平台原始 `reason` 仅放 `reasonDetail` 供诊断，
+  **不会直接展示给玩家**。
 
 **`env`（来源环境，机器人据此选择目标环境）：**
 
@@ -605,17 +618,38 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 {
   "ok": true, "liveId": "Z8CF48GJ",
   "closed": true, "status": "closed",
-  "reason": "no_activity", "agentId": "ag_xxxxxabcde"
+  "reason": "no_activity", "agentId": "ag_xxxxxabcde",
+  "message": "对战房间已关闭"        // 用户可读文案，展示用，勿展示裸 reason/status
 }
 ```
 
-- `closed:true` → 本次实际关闭；`closed:false` → 房间本已关闭 / 已不存在（幂等）。
-- **成功响应的 `reason`** 是调用方传入的关闭原因（默认 `bot_close`，≤32 字符，服务方审计用）。
-- **调用失败时**响应为 `{ "ok":false, "reason":"<错误码>", ... }`，此时 `reason` 是固定错误码：
-  - `admin_only`（HTTP 403）：非管理员 agent 调用（创建 agent 时角色不是「管理员」）；
-  - `room_not_found`：房间不存在；
-  - `not_duel`：不是对战房。
-  （与成功响应的 `reason` 语义不同：成功=审计用的关闭原因，失败=错误码。）
+返回值取值说明：
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| `closed` | `true` | 本次实际关闭 |
+| `closed` | `false` | 房间本已关闭 / 已不存在（**幂等**，常见于房间已因超时被自动回收；`status` 会同步给出房间当前状态） |
+| `status` | `closed` | 房间当前状态（已关闭） |
+| `reason` | 传入值 / `bot_close` | 机器可读的关闭原因（用于审计），**勿直接展示给玩家** |
+| `message` | 见下 | 用户可读文案，应优先展示它 |
+
+**`reason` 的语义区分**：成功响应的 `reason` 是调用方传入的关闭原因（默认 `bot_close`，≤32 字符，
+服务方审计用）；**调用失败时**响应为 `{ "ok":false, "reason":"<错误码>", ... }`，此时 `reason` 是固定错误码：
+- `admin_only`（HTTP 403）：非管理员 agent 调用（创建 agent 时角色不是「管理员」）；
+- `room_not_found`：房间不存在；
+- `not_duel`：不是对战房。
+（与成功响应的 `reason` 语义不同：成功=审计用的关闭原因，失败=错误码。）
+
+`message` 取值（调用方应直接展示，不要拼接 `reason` / `status` 等后台字段）：
+
+| 场景 | `message` |
+|---|---|
+| 关闭成功 | `对战房间已关闭` |
+| 已关闭（幂等，含因超时被自动关闭） | `对战房间已处于关闭状态（无需重复关闭）` |
+| 非管理员 agent | `仅管理员机器人可关闭对战房间`（HTTP 403 `admin_only`） |
+| 缺少 `liveId` | `缺少 liveId 参数` |
+| 房间不存在 | `对战房间不存在`（`room_not_found`） |
+| 非对战房 | `仅支持关闭对战房间`（`not_duel`） |
 - 与 `leave` 的区别：`leave` 需持有 session_key 且只能退出自己的席位；`close` 是**管理员级**的
   强制回收入口（不占用 / 不依赖任何席位），适合机器人平台定时巡检关房。
 

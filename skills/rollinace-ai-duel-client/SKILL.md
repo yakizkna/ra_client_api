@@ -233,9 +233,12 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 ```
 
 - `liveId` 必填；`reason` 可选（默认 `bot_close`，最长 32 字符，用于服务方管理端审计）。
-- 成功响应 `{ ok:true, liveId, closed, status:"closed", reason, agentId }`：
-  `closed:true` 本次实际关闭；`closed:false` 房间本已关闭 / 不存在（幂等）。
-- 非管理员 agent → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
+- 响应 `{ ok, liveId, closed, status, reason, agentId, message }`：
+  `closed:true` 本次实际关闭；`closed:false` 房间本已关闭 / 不存在（幂等，含因超时被自动关闭）。
+- **展示提示时请用 `message`**（用户可读文案，如「对战房间已关闭」/「对战房间已处于关闭状态（无需重复关闭）」），
+  不要拼接 `reason` / `status` 等后台字段直接展示给玩家。
+- 非管理员 agent → 403 `admin_only`（message：「仅管理员机器人可关闭对战房间」）；房间不存在 →
+  `room_not_found`（message：「对战房间不存在」）；非对战房 → `not_duel`（message：「仅支持关闭对战房间」）。
 - 适合机器人平台定时巡检：检测到房间无行为 / 需要关停时用它回收（区别于 `leave`：无需 session_key，可关任意房间）。
 
 ## 关键约定
