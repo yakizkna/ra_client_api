@@ -57,7 +57,7 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 服务端行为：
 - 创建对战房 `matchStatus="waiting"`，客队席位留空，`awayName` 默认 `AI客队`（可用 `aiName` 自定义）；
 - 立即向机器人服务发送通知（**仅首次建房时发送**，主播刷新复用房间不重复触发），
-  通知体带**来源环境** `env`（`prod` / `test` / `glb`，见下）；
+  通知体带**来源环境** `env`（`pro` / `tst` / `glb`，见下）；
 - 通知失败**不阻断建房**（只告警）；机器人服务可用 `action:"list"` 主动轮询兜底，
   发现 `joinable` 的房间后自行 `join`（见 [4.3.1](#431-list--列出可加入的对战房)）。
 
@@ -74,7 +74,7 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 ```json
 {
   "event": "duel_created",
-  "env": "prod",
+  "env": "pro",
   "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"],
   "homeUid": "主队完整uid", "homeName": "主队",
@@ -89,7 +89,7 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 
 ```json
 // 请求体（POST BOT_SERVICE_URL，与 duel_created 同一地址与 5s 超时）
-{ "event": "check", "env": "prod", "ts": 1756500000000 }
+{ "event": "check", "env": "pro", "ts": 1756500000000 }
 
 // 期望响应（HTTP 200，JSON）
 { "canCreate": true }                 // 或 { "canCreate": false, "reason": "机器人维护中" }
@@ -105,8 +105,8 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 | 值 | 含义 | 判定条件（服务端按部署环境自动给出，接入方无需配置） |
 |---|---|---|
 | `glb` | 国际版环境 | 国际版部署（服务方环境变量 `IS_GLB=1`）。国际版无测试环境，故优先级最高 |
-| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
-| `prod` | 正式环境 | 其余（正式部署） |
+| `tst` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `pro` | 正式环境 | 其余（正式部署） |
 
 三个环境的 `/api/ai` 基址与 agent 凭证各自独立，**机器人服务必须按 `env` 选择对应环境**
 的基址与 agent 凭证去 `join`，否则会用错凭证（`401 unauthorized`）或连到错误的环境。

@@ -16,12 +16,12 @@
 //   PORT  监听端口（默认 8080）
 //   BASE  接口基址（默认 https://ace.yakidev.top）
 //
-// 来源环境（通知体 env：prod / test / glb）→ 各环境的基址与 agent 凭证：
+// 来源环境（通知体 env：pro / tst / glb）→ 各环境的基址与 agent 凭证：
 //   三个环境独立部署、凭证互不相通，必须按通知里的 env 选择目标环境，
 //   否则会因凭证不匹配返回 401 unauthorized，或连到错误的环境。
-//   BASE_PROD / BASE_TEST / BASE_GLB                 各环境接口基址（缺省用 BASE）
+//   BASE_PRO / BASE_TST / BASE_GLB                  各环境接口基址（缺省用 BASE）
 //   AI_AGENT_ID / AI_AGENT_KEY                       正式环境凭证（必填）
-//   AI_AGENT_ID_TEST / AI_AGENT_KEY_TEST             测试环境凭证（收到 env=test 时需要）
+//   AI_AGENT_ID_TST / AI_AGENT_KEY_TST               测试环境凭证（收到 env=tst 时需要）
 //   AI_AGENT_ID_GLB  / AI_AGENT_KEY_GLB              国际版凭证（收到 env=glb 时需要）
 //   未配置的环境回退到正式环境凭证（仅示例行为，生产应显式配置并拒绝未知环境）
 //
@@ -46,10 +46,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 来源环境 → 目标环境的基址与 agent 凭证（见文件头说明）
 const ENVS = {
-  prod: { name: "正式", base: process.env.BASE_PROD || BASE, agentId: AGENT_ID, key: AGENT_KEY },
-  test: {
-    name: "测试", base: process.env.BASE_TEST || BASE,
-    agentId: process.env.AI_AGENT_ID_TEST, key: process.env.AI_AGENT_KEY_TEST,
+  pro: { name: "正式", base: process.env.BASE_PRO || BASE, agentId: AGENT_ID, key: AGENT_KEY },
+  tst: {
+    name: "测试", base: process.env.BASE_TST || BASE,
+    agentId: process.env.AI_AGENT_ID_TST, key: process.env.AI_AGENT_KEY_TST,
   },
   glb: {
     name: "国际版", base: process.env.BASE_GLB || BASE,
@@ -62,7 +62,7 @@ function resolveEnv(env) {
   const target = ENVS[env];
   if (target && target.agentId && target.key) return target;
   console.warn(`[env=${env || "-"}] 未配置该环境的 agent 凭证，回退正式环境（生产应显式配置并拒绝未知环境）`);
-  return ENVS.prod;
+  return ENVS.pro;
 }
 
 /** POST /api/ai（可指定目标环境），返回 JSON 响应体（业务失败为 HTTP 200 + ok:false） */
@@ -97,7 +97,7 @@ function pickAction(allowed) {
 
 /** 加入对局并循环走棋（每局一个异步任务，互不阻塞） */
 async function playDuel({ liveId, homeName, awayName }, target) {
-  const env = target || ENVS.prod;
+  const env = target || ENVS.pro;
   const call = (payload) => ai(payload, env);
   try {
     // 1) join：占用客队席位，自动开局（客场先攻）
@@ -180,7 +180,7 @@ const server = http.createServer((req, res) => {
         console.log(`能力查询：event=check env=${payload.env || "-"} → canCreate=${canCreate}`);
         res.end(JSON.stringify({ canCreate }));
       } else if (payload.event === "duel_created" && payload.liveId) {
-        // 通知体带来源环境 env（prod/test/glb）：各环境基址与凭证独立，按 env 选择目标环境
+        // 通知体带来源环境 env（pro/tst/glb）：各环境基址与凭证独立，按 env 选择目标环境
         const env = resolveEnv(payload.env);
         console.log(`收到通知：AI 对战房 ${payload.liveId} 已创建（env=${payload.env || "-"} → ${env.name} ${env.base}），开始加入…`);
         playDuel(payload, env); // 异步执行，立即响应

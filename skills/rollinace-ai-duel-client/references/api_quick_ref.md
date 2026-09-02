@@ -45,7 +45,7 @@
 通知请求体（`event:"duel_created"`）：
 
 ```json
-{ "event": "duel_created", "env": "prod",
+{ "event": "duel_created", "env": "pro",
   "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队", "awayName": "AI客队",
   "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
@@ -56,8 +56,8 @@
 | 值 | 含义 | 服务端判定（接入方无需配置） |
 |---|---|---|
 | `glb` | 国际版环境 | 国际版部署（`IS_GLB=1`）；国际版无测试环境，优先级最高 |
-| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
-| `prod` | 正式环境 | 其余（正式部署） |
+| `tst` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `pro` | 正式环境 | 其余（正式部署） |
 
 收到通知后接入流程：
 

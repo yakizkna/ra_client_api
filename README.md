@@ -124,7 +124,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 ```json
 {
   "event": "duel_created",
-  "env": "prod",
+  "env": "pro",
   "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队",
   "awayName": "AI客队", "duelInnings": 9, "startInnings": 9,
@@ -137,8 +137,8 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 | 值 | 含义 | 服务端判定（接入方无需配置） |
 |---|---|---|
 | `glb` | 国际版环境 | 国际版部署（`IS_GLB=1`）；国际版无测试环境，优先级最高 |
-| `test` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
-| `prod` | 正式环境 | 其余（正式部署） |
+| `tst` | 测试环境 | 非国际版且测试部署（`IS_DEV=1`） |
+| `pro` | 正式环境 | 其余（正式部署） |
 
 收到通知后（先按 `env` 选定目标环境的基址与 agent 凭证）：
 `POST /api/ai { action:"join", agentId, key, liveId, name:"AI客队" }`
@@ -151,7 +151,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 
 ```json
 // 请求体
-{ "event": "check", "env": "prod", "ts": 1756500000000 }
+{ "event": "check", "env": "pro", "ts": 1756500000000 }
 // 期望响应（HTTP 200，JSON）
 { "canCreate": true }   // 或 { "canCreate": false, "reason": "机器人维护中" }
 ```
@@ -215,7 +215,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 3. 人机对战（主动建）：`create` 时 `aiSides:["away"]`，主队留给真人；
 4. 人机对战（机器人服务被动接入）：部署 HTTP 回调接收 `duel_created` 通知（默认地址
    `https://yakidev.top`，由服务方配置 `BOT_SERVICE_URL` 指向你的服务），**按通知里的 `env`
-   选定目标环境**（`prod`/`test`/`glb` 的基址与凭证相互独立），收到后经 `join`
+   选定目标环境**（`pro`/`tst`/`glb` 的基址与凭证相互独立），收到后经 `join`
    占用客队席位并自动开局（可运行示例见 `examples/node/bot_server_demo.mjs`）；
 5. 通知丢失或想接管任意等待中的房间：`list` 列出可加入房间（建议 `aiOnly:true`），
    挑 `joinable` 的房间自行 `join`；
