@@ -127,7 +127,9 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
   "type": "duel", "ai": true,
   "closedBy": "host",          // "host"（主播关播 stop）/ "player"（对战玩家主动退出 leave）
   "reason": "host_closed",     // "host_closed" / "player_leave"
-  "matchStatus": "live", "ts": 1756500000000 }
+  "matchStatus": "live",       // 关房时刻的比赛状态：live / ended / waiting
+  "matchEnded": false,         // true=比赛已正常结束后关房（收尾）；false=比赛中/未开始关房（弃权/中断）
+  "ts": 1756500000000 }
 ```
 
 - 仅 **AI 对战房**（`ai:true`）发送；普通对战房无机器人服务，不发。

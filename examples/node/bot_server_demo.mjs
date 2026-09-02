@@ -220,10 +220,12 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify(check));
       } else if (payload.event === "room_closed" && payload.liveId) {
         // 关房通知：用户主动关闭了对战房间（主播关播 stop / 对战玩家主动退出 leave）。
-        // 停止该房间的走棋并释放会话资源；即使通知丢失，走棋轮询 state 也会以
-        // roomStatus:"closed" 兜底退出，因此这里只需终止本地对局任务即可。
+        // matchEnded 区分关房时机：true=比赛已正常结束后关房（收尾），false=比赛中/未开始关房
+        // （弃权/中断）。机器人可按此决定结算收尾还是按弃权处理，并停止该房间走棋。
+        // 即使通知丢失，走棋轮询 state 也会以 roomStatus:"closed" 兜底退出。
         console.log(`收到通知：AI 对战房 ${payload.liveId} 已关闭` +
-          `（closedBy=${payload.closedBy || "-"} reason=${payload.reason || "-"}），停止走棋`);
+          `（closedBy=${payload.closedBy || "-"} reason=${payload.reason || "-"}` +
+          ` matchEnded=${payload.matchEnded === true}），停止走棋`);
         res.end(JSON.stringify({ ok: true, liveId: payload.liveId }));
       } else if (payload.event === "duel_created" && payload.liveId) {
         // 通知体带来源环境 env（pro/tst/glb）：各环境基址与凭证独立，按 env 选择目标环境

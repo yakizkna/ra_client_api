@@ -108,7 +108,9 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
   "type": "duel", "ai": true,
   "closedBy": "host",          // "host"（主播关播 stop）/ "player"（对战玩家主动退出 leave）
   "reason": "host_closed",     // "host_closed" / "player_leave"
-  "matchStatus": "live", "ts": 1756500000000 }
+  "matchStatus": "live",       // 关房时刻的比赛状态：live / ended / waiting
+  "matchEnded": false,         // true=比赛已正常结束后关房（收尾）；false=比赛中/未开始关房（弃权/中断）
+  "ts": 1756500000000 }
 ```
 
 **`env` 是来源环境，机器人服务必须按它选择目标环境**（`/api/ai` 基址与 agent 凭证按环境隔离）：

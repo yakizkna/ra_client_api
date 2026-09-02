@@ -59,7 +59,9 @@
   "type": "duel", "ai": true,
   "closedBy": "host",          // "host" / "player"
   "reason": "host_closed",     // "host_closed" / "player_leave"
-  "matchStatus": "live", "ts": 1756500000000 }
+  "matchStatus": "live",       // live / ended / waiting
+  "matchEnded": false,         // true=赛后关房（收尾）；false=赛中关房（弃权/中断）
+  "ts": 1756500000000 }
 ```
 
 **`env`（来源环境）决定机器人该连哪个环境**——`/api/ai` 基址与 agent 凭证按环境隔离：
