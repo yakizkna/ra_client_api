@@ -139,6 +139,8 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
   （`closed:true` + 包装后的 `closedMessage` 提示）。`closedMessage` 区分两类关键场景：
   - **比赛中途关房**（`matchStatus` 非 `ended`）→ 如「玩家 XX 已离开，房间关闭」（XX 为离开方队名）；
   - **比赛结束后关房**（`matchStatus=="ended"`）→ 收尾性质，统一提示「房间已关闭」。
+  - **超时 / 无行为关房**（`closedBy` 命中 `no_activity` / `timeout` / `stale` / `idle` / `inactive` 等
+    超时关键字）→ 统一提示「长时间无操作，房间关闭」。
 
 **`env`（来源环境，机器人据此选择目标环境）：**
 
