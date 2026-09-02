@@ -3,9 +3,10 @@
 // bot_server_demo.mjs — 机器人服务示例（人机对战：真人主队 vs 机器人客队）
 // ----------------------------------------------------------------------------
 // 流程：
-//   1. 启动本地 HTTP 服务，监听 POST /（根路径）接收 duel_created 通知；
-//   2. 收到通知后经 /api/ai join 占用客队席位（自动开局，客场先攻）；
-//   3. 按 allowedActions 循环 state/act 自行走棋，直至比赛结束。
+//   1. 启动本地 HTTP 服务，监听 POST /（根路径）接收服务端回调；
+//   2. event:"check"（真人端勾选「AI 对战」开关时的能力查询）→ 返回 { canCreate:true }；
+//   3. event:"duel_created"（AI 对战房已创建）→ 经 /api/ai join 占用客队席位（自动开局，客场先攻）；
+//   4. 按 allowedActions 循环 state/act 自行走棋，直至比赛结束。
 //
 // 用法：
 //   AI_AGENT_ID=<agent_id> AI_AGENT_KEY=<agent_key> \
@@ -73,6 +74,19 @@ async function ai(payload, target) {
     body: JSON.stringify(payload),
   });
   return resp.json();
+}
+
+/**
+ * 能力查询（event:"check"）：真人端勾选「AI 对战」开关时服务端发起。
+ * 按环境判断该环境是否配置了 agent 凭证（= 该环境能否提供对局服务），
+ * 未配置/服务不可用时返回 canCreate:false（前端提示「暂时无法 AI 对战」并回滚勾选）。
+ */
+async function checkCanCreate(payload) {
+  const env = payload.env;
+  const target = ENVS[env];
+  if (target && target.agentId && target.key) return true;
+  console.warn(`[check] env=${env || "-"} 未配置该环境 agent 凭证 → canCreate:false`);
+  return false;
 }
 
 /** 简单决策：按优先级选操作，保证局面能持续推进 */
@@ -155,11 +169,17 @@ const server = http.createServer((req, res) => {
   }
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
-  req.on("end", () => {
+  req.on("end", async () => {
     res.writeHead(200, { "Content-Type": "application/json" });
     try {
       const payload = JSON.parse(raw || "{}");
-      if (payload.event === "duel_created" && payload.liveId) {
+      if (payload.event === "check") {
+        // 能力查询：真人端勾选「AI 对战」开关时服务端发起。
+        // 返回 canCreate:false（或非 2xx / 超时）时前端会提示「暂时无法 AI 对战」并回滚勾选。
+        const canCreate = await checkCanCreate(payload);
+        console.log(`能力查询：event=check env=${payload.env || "-"} → canCreate=${canCreate}`);
+        res.end(JSON.stringify({ canCreate }));
+      } else if (payload.event === "duel_created" && payload.liveId) {
         // 通知体带来源环境 env（prod/test/glb）：各环境基址与凭证独立，按 env 选择目标环境
         const env = resolveEnv(payload.env);
         console.log(`收到通知：AI 对战房 ${payload.liveId} 已创建（env=${payload.env || "-"} → ${env.name} ${env.base}），开始加入…`);

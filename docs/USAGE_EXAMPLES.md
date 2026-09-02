@@ -288,9 +288,11 @@ main();
 
 ## 8. Node.js — 机器人服务（人机对战）
 
-真人端「开启 AI 对战」建房后，服务端会 HTTP 通知机器人服务（`duel_created`，默认地址
-`https://yakidev.top`，可用 `BOT_SERVICE_URL` 覆盖）。机器人服务收到通知后经 `join`
-占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋。
+机器人服务需处理两类服务端回调（同一地址 `BOT_SERVICE_URL`，默认 `https://yakidev.top`）：
+- **`check`（能力查询）**：真人端勾选「AI 对战」开关时发起，返回 `{ canCreate }`；
+  返回不可用 / 超时 / 非 2xx 时前端会提示「暂时无法 AI 对战」并回滚勾选（fail-closed）。
+- **`duel_created`（建房通知）**：AI 对战房已创建，机器人服务收到后经 `join`
+  占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋。
 
 通知体带**来源环境** `env`（`prod` / `test` / `glb`），各环境的 `/api/ai` 基址与 agent 凭证
 相互独立，**必须先按 `env` 选定目标环境**再 `join`（用错凭证会 `401 unauthorized`）：
@@ -304,7 +306,12 @@ main();
 ```js
 // 伪代码（完整可运行示例见 examples/node/bot_server_demo.mjs）
 http.createServer(async (req, res) => {
-  const payload = JSON.parse(await readBody(req));   // event:"duel_created", env, liveId, awayName, ...
+  const payload = JSON.parse(await readBody(req));   // event:"check" | "duel_created"
+  if (payload.event === "check") {
+    // 能力查询：按 env 判断该环境能否提供对局服务
+    const target = resolveEnv(payload.env);
+    return res.end(JSON.stringify({ canCreate: Boolean(target && target.agentId && target.key) }));
+  }
   if (payload.event !== "duel_created") return res.end("{}");
 
   // 0) 按 env 选定目标环境的基址与该环境的 agent 凭证
@@ -335,7 +342,7 @@ AI_AGENT_ID=<agent_id> AI_AGENT_KEY=<agent_key> PORT=8080 node examples/node/bot
 ```
 
 将本服务公网地址提供给服务方，配置为 `BOT_SERVICE_URL`（默认 `https://yakidev.top`）。
-通知契约为 `POST` + `Content-Type: application/json`，5 秒超时、无重试；通知失败不阻断建房，
+回调契约为 `POST` + `Content-Type: application/json`，5 秒超时、无重试；回调失败不阻断建房，
 机器人服务可用 `action:"list"` 主动轮询兜底（见第 9 节）。
 
 ## 9. 列出可加入的对战房（list）/ 读取房间聊天（log）
@@ -381,3 +388,39 @@ const logs = await post({ action: "log", key: sessionKey, type: "chat", since })
 for (const l of logs.logs) console.log(l.ts, l.text);
 since = logs.logs.length ? logs.logs[logs.logs.length - 1].ts : since;
 ```
+
+## 10. 管理员关闭对战房间（close）
+
+回收「无行为 / 需要关闭」的对战房间：**仅 `role:"admin"` 的管理员 agent 可调用**
+（管理端「AI 管理」页创建 agent 时角色选「管理员」），按 `liveId` 直接关闭，
+无需持有该房间的 session_key。适合机器人平台定时巡检：检测到房间无行为 / 需要关停时用它回收。
+
+```bash
+BASE=https://ace.yakidev.top
+AI_ADMIN_ID=<admin_agent_id>    # 角色为「管理员」的 agent
+AI_ADMIN_KEY=<admin_agent_key>
+
+# 关闭对战房间（幂等：已关闭/不存在时 closed:false，不重复执行）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"close","agentId":"'$AI_ADMIN_ID'","key":"'$AI_ADMIN_KEY'","liveId":"Z8CF48GJ","reason":"no_activity"}' \
+  | jq .
+# → { "ok":true, "liveId":"Z8CF48GJ", "closed":true, "status":"closed", "reason":"no_activity", "agentId":"ag_..." }
+```
+
+Node.js（巡检示例：每 60s 关闭超过 10 分钟无行为的 AI 对战房）：
+
+```js
+// 需要管理端创建 role:"admin" 的管理员 agent
+setInterval(async () => {
+  const rooms = await post({ action: "list", agentId: AI_ADMIN_ID, key: AI_ADMIN_KEY, joinable: false });
+  for (const r of rooms.rooms) {
+    if (r.matchStatus === "playing" && (r.lastActivityAgeSec || 0) > 600) {
+      await post({ action: "close", agentId: AI_ADMIN_ID, key: AI_ADMIN_KEY, liveId: r.liveId, reason: "no_activity" });
+    }
+  }
+}, 60_000);
+```
+
+- 非管理员 agent 调用 → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
+- 与 `leave` 的区别：`leave` 需持有 session_key 且只能退出自己的席位；`close` 是**管理员级**
+  的强制回收入口，不占用 / 不依赖任何席位，可关任意对战房间。

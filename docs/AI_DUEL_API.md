@@ -11,6 +11,12 @@
 > 与真人端共用同一套对战状态机、规则引擎与直播帧通道：AI 的每一步操作都会广播为
 > 一帧，真人端可实时观战。
 >
+> 服务端侧另提供两项联动能力：
+> - **能力查询（check）**：真人端勾选「AI 对战」开关时，服务端回调机器人服务（`event:"check"`）
+>   实时确认能否创建 AI 对战；机器人返回不可用则前端提示「暂时无法 AI 对战」，避免建房后机器人不加入。
+> - **管理员关房（close）**：`role:"admin"` 的管理员 agent 可经 `/api/ai` `close` 按 `liveId`
+>   直接关闭对战房间（机器人平台检测到房间无行为时用于回收），无需持有该房 session_key。
+>
 > 本接口作为**公开 API** 提供，接入方只需要知道本页文档中的域名与接口，无需关心后端实现。
 
 ---
@@ -78,6 +84,22 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 }
 ```
 
+**能力查询（`event:"check"`）：** 真人端勾选「AI 对战」开关时，服务端向机器人服务发起能力查询，
+机器人服务返回能否创建 AI 对战：
+
+```json
+// 请求体（POST BOT_SERVICE_URL，与 duel_created 同一地址与 5s 超时）
+{ "event": "check", "env": "prod", "ts": 1756500000000 }
+
+// 期望响应（HTTP 200，JSON）
+{ "canCreate": true }                 // 或 { "canCreate": false, "reason": "机器人维护中" }
+```
+
+- `canCreate:true` → 前端允许勾选；`false` / 非 2xx / 超时 / 响应非 JSON → 视为**不可用**，
+  前端提示「AI 服务暂时不可用，暂时无法进行 AI 对战」（附 `reason`），并回滚勾选。
+- 语义上采取 **fail-closed**：无法确认机器人可服务时一律按不可用处理，
+  避免建房后机器人不加入导致房间永远 `waiting`。
+
 **`env`（来源环境，机器人据此选择目标环境）：**
 
 | 值 | 含义 | 判定条件（服务端按部署环境自动给出，接入方无需配置） |
@@ -118,8 +140,8 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 
 | 阶段 | 说明 |
 |---|---|
-| 凭证 | 服务方在管理端「AI 管理」页创建 agent，获得 `agent_id` 与 `key`（key 仅显示一次，请妥善保存；服务端只存哈希） |
-| 换票 | `session` / `create` / `join` 接口带 `agentId` + `key`（两字段任选 body 或请求头）。凭证无效 / 已被停用 → 401 `unauthorized` |
+| 凭证 | 服务方在管理端「AI 管理」页创建 agent，获得 `agent_id` 与 `key`（key 仅显示一次，请妥善保存；服务端只存哈希）。创建时可选择**角色**：`agent`（普通，默认）/ `admin`（管理员，可调 `close` 关闭对战房间） |
+| 换票 | `session` / `create` / `join` / `list` / `close` 接口带 `agentId` + `key`（两字段任选 body 或请求头）。凭证无效 / 已被停用 → 401 `unauthorized` |
 | 会话 | 换票成功后返回 `key`（session_key）。后续 `state` / `act` / `heartbeat` / `leave` 带该 key |
 | 绑定 | key 与 **房间（liveId）+ 阵营（side：home/away）** 绑定，天然隔离：跨房调用 → 403 `session_mismatch` |
 | 有效期 | 24 小时，**滑动续期**（每次成功调用自动续期）；`leave` 或过期后失效 |
@@ -186,6 +208,7 @@ roll1 ──掷骰──▶ [1B/?] ──▶ choose ──take1B──┐
 | `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
+| `close` | agentId + key（**仅 `role:"admin"`**） | 管理员机器人关闭对战房间（按 `liveId`，无需 session_key） |
 
 > 服务方按 agent + 接口记录调用量，可在管理端「AI 管理」页查看各 agent 的分接口调用量与最近活跃时间。
 
@@ -554,6 +577,40 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 - 典型用法：记录上次拿到的最大 `ts`，下次带 `since` 增量拉取；首次可不带 `since` 只取最近 `limit` 条。
 - 失败：无 key / key 失效 → 401 `unauthorized`；key 与其他房间不匹配 → 403 `session_mismatch`。
 
+### 4.9 close — 管理员机器人关闭对战房间
+
+供机器人平台回收「无行为 / 需要关闭」的对战房间：**仅 `role:"admin"` 的管理员 agent 可调用**，
+按 `liveId` 直接关闭，无需持有该房间的 session_key。关闭幂等（房间已关闭则返回 `closed:false`，不重复执行）。
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"close","agentId":"<adminAgentId>","key":"<adminKey>","liveId":"Z8CF48GJ","reason":"no_activity"
+}'
+```
+
+请求参数：
+
+| 字段 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `agentId` + `key` | 是 | — | 管理端分配的**管理员** agent 凭证（创建 agent 时角色选「管理员」） |
+| `liveId` | 是 | — | 要关闭的对战房间号 |
+| `reason` | 否 | `bot_close` | 关闭原因（最长 32 字符），用于服务方管理端审计 |
+
+成功响应：
+
+```json
+{
+  "ok": true, "liveId": "Z8CF48GJ",
+  "closed": true, "status": "closed",
+  "reason": "no_activity", "agentId": "ag_xxxxxabcde"
+}
+```
+
+- `closed:true` → 本次实际关闭；`closed:false` → 房间本已关闭 / 已不存在（幂等）。
+- 非管理员 agent 调用 → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
+- 与 `leave` 的区别：`leave` 需持有 session_key 且只能退出自己的席位；`close` 是**管理员级**的
+  强制回收入口（不占用 / 不依赖任何席位），适合机器人平台定时巡检关房。
+
 ---
 
 ## 五、allowedActions 推导规则
@@ -615,6 +672,7 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `illegal_op` | 200 | 操作不合法（响应含 `allowed`、`reasonDetail`） |
 | `version_conflict` | 200 | `expectVersion` 与当前版本不一致（重复提交） |
 | `unknown_action` | 200 | 未知 action（响应含 `supported`） |
+| `admin_only` | 403 | 仅管理员 agent（`role:"admin"`）可调用的接口（如 `close`） |
 | `internal` | 500 | 服务端异常 |
 | 引擎透传 | 200 | `not_choose_phase` / `bs_in_progress` / `condition_failed` / `invalid_item` / `invalid_duel_session` |
 

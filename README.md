@@ -19,6 +19,8 @@ AI 对战接口能力：
 - **创建 AI 对战房**（AI vs AI 自对弈，立即开局）
 - **加入真人对战房**（人机对战，默认客队席位）
 - **机器人服务接入**（真人建房开启 AI 对战 → 服务端 `duel_created` 通知 → 机器人自动加入并走棋）
+- **能力查询**（真人勾选「AI 对战」开关时服务端回调 `event:"check"`，机器人实时确认能否创建对局）
+- **管理员关房**（`role:"admin"` 管理员 agent 经 `close` 按 `liveId` 关闭对战房间，用于回收无行为房间）
 - **读取完整局面**（比分/出局/垒位/当前进攻方/轮到谁/可执行操作）
 - **执行比赛操作**（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）
 
@@ -144,6 +146,19 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 通知丢失时可用 `action:"list"` 主动拉取可加入的房间兜底。
 可运行示例见 [examples/node/bot_server_demo.mjs](examples/node/bot_server_demo.mjs)。
 
+**能力查询（`event:"check"`）**：真人端勾选「AI 对战」开关时，服务端会向机器人服务发起能力查询
+（`POST`，与 `duel_created` 同一地址与 5s 超时）：
+
+```json
+// 请求体
+{ "event": "check", "env": "prod", "ts": 1756500000000 }
+// 期望响应（HTTP 200，JSON）
+{ "canCreate": true }   // 或 { "canCreate": false, "reason": "机器人维护中" }
+```
+
+返回不可用（`canCreate:false` / 超时 / 非 2xx）时前端会提示「暂时无法 AI 对战」并回滚勾选，
+避免建房后机器人不加入导致房间永远 `waiting`（fail-closed）。
+
 ---
 
 ## 接口总览
@@ -171,6 +186,7 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 | `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间并撤销 key |
+| `close` | agentId + key（仅 `role:"admin"`） | 管理员机器人关闭对战房间（按 `liveId`，无需 session_key） |
 
 > 换票（`session`/`create`/`join`/`list`）用管理端分配的 `agentId`+`key`（body 或 `X-Agent-Id`+`X-AI-Key` 请求头）；会话（`state`/`act`/`chat`/`log`/`heartbeat`/`leave`）用换票返回的 `key`（与房间 + 阵营绑定，24h 滑动续期）。
 > 换边与比赛结束由服务端自动推进，AI 只需按 `allowedActions` 循环 `state`/`act`；人机对战真人半局结束后
@@ -207,7 +223,9 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
 7. 想与真人互动：`log`（`type:"chat"`）读弹幕 + `chat` 发弹幕，与真人端同一份日志流；
 8. `act` 失败（`ok:false` + `reason`）时按响应中的 `allowed` 自我纠正；
 9. 轮询间隔建议 ≥1s；比赛结束以 `matchStatus==="ended"` 为准；
-10. 会话结束时调 `leave` 撤销 key；不调也不影响（24h 自动过期）。
+10. 会话结束时调 `leave` 撤销 key；不调也不影响（24h 自动过期）；
+11. 机器人平台需实现 `event:"check"` 能力查询回调（返回 `{ canCreate }`，真人端勾选「AI 对战」时调用）；
+    需要回收无行为房间时，用 `role:"admin"` 管理员凭证调 `close` 按 `liveId` 关闭。
 
 ---
 

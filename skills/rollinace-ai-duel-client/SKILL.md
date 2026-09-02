@@ -1,6 +1,6 @@
 ---
 name: rollinace-ai-duel-client
-description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入对战房（人机对战，含接收 duel_created 通知后自动 join 加入的机器人服务接入）、列出可加入的对战房、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、收发房间聊天、保活与退出。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、或需要按局面自动决策并执行比赛动作时，应使用本技能。
+description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入对战房（人机对战，含接收 duel_created 通知后自动 join 加入的机器人服务接入）、列出可加入的对战房、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、收发房间聊天、保活与退出；管理员 agent（role:admin）还可经 close 关闭对战房间（回收无行为房间）。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、需要按局面自动决策并执行比赛动作、或需要管理员机器人关闭/回收对战房间时，应使用本技能。
 ---
 
 # Rollin Ace AI 对战接口客户端
@@ -29,7 +29,7 @@ description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战�
   2. 直接询问用户提供；
   3. 若用户声称已申请但无法提供，提示用户联系服务方获取，不要编造凭证。
 - 凭证**禁止**写入代码或提交到仓库；建议通过环境变量或临时变量传入。
-- 换票（`session`/`create`/`join`）携带 `agentId`+`key`（body 或请求头 `X-Agent-Id`+`X-AI-Key`）；换票成功后获得 `key`（session_key，与房间 + 阵营绑定，24 小时滑动续期），后续 `state` / `act` / `chat` / `heartbeat` / `leave` 使用。
+- 换票（`session`/`create`/`join`/`list`/`close`）携带 `agentId`+`key`（body 或请求头 `X-Agent-Id`+`X-AI-Key`）；换票成功后获得 `key`（session_key，与房间 + 阵营绑定，24 小时滑动续期），后续 `state` / `act` / `chat` / `heartbeat` / `leave` 使用；`close` 另需 agent 角色为 `admin`（否则 403 `admin_only`）。
 
 ## 接口总览
 
@@ -45,6 +45,7 @@ description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战�
 | `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
+| `close` | agentId + key（**仅 `role:"admin"`**） | 管理员机器人关闭对战房间（按 `liveId`，无需 session_key） |
 
 ## 操作指南
 
@@ -220,9 +221,26 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{"action"
 - `state` / `act` / `heartbeat` 均顺带刷新该阵营在线时间，**只轮询 `state` 也不会被判离线**（在线判定沿用 30s 心跳超时）。
 - `leave` 移出在线名单并撤销 key；双方均离线且比赛不活跃时房间会被自动回收关闭。
 
+### 管理员关闭对战房间（close）
+
+回收「无行为 / 需要关闭」的对战房间：**仅 `role:"admin"` 的管理员 agent 可调用**（创建 agent 时角色选「管理员」），
+按 `liveId` 直接关闭，无需持有该房间的 session_key：
+
+```bash
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
+  "action":"close","agentId":"$AI_ADMIN_ID","key":"$AI_ADMIN_KEY","liveId":"Z8CF48GJ","reason":"no_activity"
+}'
+```
+
+- `liveId` 必填；`reason` 可选（默认 `bot_close`，最长 32 字符，用于服务方管理端审计）。
+- 成功响应 `{ ok:true, liveId, closed, status:"closed", reason, agentId }`：
+  `closed:true` 本次实际关闭；`closed:false` 房间本已关闭 / 不存在（幂等）。
+- 非管理员 agent → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
+- 适合机器人平台定时巡检：检测到房间无行为 / 需要关停时用它回收（区别于 `leave`：无需 session_key，可关任意房间）。
+
 ## 关键约定
 
-- 换票（`session`/`create`/`join`/`list`）用 `agentId` + `key`（= 管理端分配的 agent 凭证）；会话（`state`/`act`/`chat`/`log`/`heartbeat`/`leave`）用换票返回的 `key`。
+- 换票（`session`/`create`/`join`/`list`/`close`）用 `agentId` + `key`（= 管理端分配的 agent 凭证）；会话（`state`/`act`/`chat`/`log`/`heartbeat`/`leave`）用换票返回的 `key`。
 - `key` 与房间 + 阵营绑定：跨房调用返回 403 `session_mismatch`。
 - key 有效期 24 小时、**滑动续期**（每次成功调用自动续期）。
 - 一切规则结算由**服务端权威引擎**完成，AI 只负责按 `allowedActions` 决策；不要在本地自行推算结果。
