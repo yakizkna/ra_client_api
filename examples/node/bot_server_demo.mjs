@@ -24,6 +24,8 @@
 //   AI_AGENT_ID_TST / AI_AGENT_KEY_TST               测试环境凭证（收到 env=tst 时需要）
 //   AI_AGENT_ID_GLB  / AI_AGENT_KEY_GLB              国际版凭证（收到 env=glb 时需要）
 //   未配置的环境回退到正式环境凭证（仅示例行为，生产应显式配置并拒绝未知环境）
+//   AI_ADMIN_ID / AI_ADMIN_KEY                       管理员 agent 凭证（创建时角色选「管理员」，
+//   用于 close 关闭超时房间；未配置则跳过 close 巡检）
 //
 // 通知地址：默认 https://yakidev.top（服务方通过 BOT_SERVICE_URL 环境变量指向
 // 本服务的公网地址；本示例只实现「收到通知 → join → 走棋」，无鉴权、无重试队列，
@@ -36,6 +38,8 @@ const BASE = process.env.BASE || "https://ace.yakidev.top";
 const PORT = Number(process.env.PORT || 8080);
 const AGENT_ID = process.env.AI_AGENT_ID;
 const AGENT_KEY = process.env.AI_AGENT_KEY;
+const ADMIN_ID = process.env.AI_ADMIN_ID;   // 管理员 agent（角色「管理员」，可调 close）
+const ADMIN_KEY = process.env.AI_ADMIN_KEY;
 
 if (!AGENT_ID || !AGENT_KEY) {
   console.error("错误：请设置 AI_AGENT_ID 与 AI_AGENT_KEY（管理端「AI 管理」页分配）");
@@ -158,6 +162,39 @@ async function playDuel({ liveId, homeName, awayName }, target) {
   }
 }
 
+/**
+ * 管理员 close 巡检：定期关闭「无行为 / 需要关闭」的对战房间（仅 role:"admin" 可调）。
+ *
+ * 返回值取值：
+ *   r.ok      === true  调用成功（业务失败多为 HTTP 200 + ok:false，勿只看状态码）
+ *   r.closed  === true  本次实际关闭；false = 房间本已关闭/不存在（幂等，不重复执行）
+ *   r.status / r.reason / r.agentId  审计字段
+ *   非管理员 agent 调用 → 403 admin_only
+ */
+async function closeStaleRooms(thresholdSec = 600) {
+  if (!ADMIN_ID || !ADMIN_KEY) {
+    console.log("[close] 未配置 AI_ADMIN_ID/AI_ADMIN_KEY，跳过巡检");
+    return;
+  }
+  const target = ENVS.pro;   // 示例：管理员凭证按正式环境；生产按需按环境配置
+  const list = await ai(
+    { action: "list", agentId: ADMIN_ID, key: ADMIN_KEY, joinable: false },
+    target,
+  );
+  for (const r of list.rooms || []) {
+    const age = r.lastActivityAgeSec ?? r.ageSec ?? 0;
+    if (age <= thresholdSec) continue;
+    const res = await ai(
+      { action: "close", agentId: ADMIN_ID, key: ADMIN_KEY, liveId: r.liveId, reason: "no_activity" },
+      target,
+    );
+    console.log(
+      `[close] ${r.liveId} → ok=${res.ok} closed=${res.closed} ` +
+      `status=${res.status || "-"} reason=${res.reason || "-"}`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP 服务：接收 duel_created 通知
 // ---------------------------------------------------------------------------
@@ -198,4 +235,12 @@ server.listen(PORT, () => {
   console.log(`机器人服务已启动：监听 POST /，端口 ${PORT}`);
   console.log(`接口基址：${BASE}/api/ai；agent: ${AGENT_ID}`);
   console.log(`请将本服务公网地址告知服务方配置为 BOT_SERVICE_URL（默认 https://yakidev.top）`);
+  // 管理员 close 巡检：配了 AI_ADMIN_ID/KEY 时每 60s 关一轮超时房间
+  if (ADMIN_ID && ADMIN_KEY) {
+    closeStaleRooms().catch((e) => console.error("[close] 巡检异常:", (e && e.message) || e));
+    setInterval(
+      () => closeStaleRooms().catch((e) => console.error("[close] 巡检异常:", (e && e.message) || e)),
+      60_000,
+    );
+  }
 });

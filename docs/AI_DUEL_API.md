@@ -97,6 +97,9 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 
 - `canCreate:true` → 前端允许勾选；`false` / 非 2xx / 超时 / 响应非 JSON → 视为**不可用**，
   前端提示「AI 服务暂时不可用，暂时无法进行 AI 对战」（附 `reason`），并回滚勾选。
+- `reason`（可选，`canCreate:false` 时建议带上）：**机器人服务返回的自由文本**（不可用原因），
+  前端会原样附在提示语中；取值由机器人自定，如「并发已满，暂时无法提供服务」「未配置该环境 agent 凭证」
+  「维护中」等，建议 ≤64 字符。`canCreate:true` 时无需返回。
 - 语义上采取 **fail-closed**：无法确认机器人可服务时一律按不可用处理，
   避免建房后机器人不加入导致房间永远 `waiting`。
 
@@ -607,7 +610,12 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 ```
 
 - `closed:true` → 本次实际关闭；`closed:false` → 房间本已关闭 / 已不存在（幂等）。
-- 非管理员 agent 调用 → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
+- **成功响应的 `reason`** 是调用方传入的关闭原因（默认 `bot_close`，≤32 字符，服务方审计用）。
+- **调用失败时**响应为 `{ "ok":false, "reason":"<错误码>", ... }`，此时 `reason` 是固定错误码：
+  - `admin_only`（HTTP 403）：非管理员 agent 调用（创建 agent 时角色不是「管理员」）；
+  - `room_not_found`：房间不存在；
+  - `not_duel`：不是对战房。
+  （与成功响应的 `reason` 语义不同：成功=审计用的关闭原因，失败=错误码。）
 - 与 `leave` 的区别：`leave` 需持有 session_key 且只能退出自己的席位；`close` 是**管理员级**的
   强制回收入口（不占用 / 不依赖任何席位），适合机器人平台定时巡检关房。
 
