@@ -133,6 +133,8 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 - 仅 **AI 对战房**（`ai:true`）发送；普通对战房无机器人服务，不发。
 - 机器人服务收到后应**停止该房间的走棋**并释放会话资源（后续 `state` 会返回 `room_closed`）；
   通知丢失时以 `action:"state"` 返回的 `roomStatus:"closed"` 兜底感知。
+- 房间关闭对**所有**在房用户生效：真人对手与观众通过 `GET /api/live` 轮询感知
+  （`closed:true` + 包装后的 `closedMessage` 提示，如「对战对手已退出，房间已关闭」）。
 
 **`env`（来源环境，机器人据此选择目标环境）：**
 
