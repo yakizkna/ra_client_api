@@ -288,12 +288,15 @@ main();
 
 ## 8. Node.js — 机器人服务（人机对战）
 
-机器人服务需处理两类服务端回调（同一地址 `BOT_SERVICE_URL`，默认 `https://yakidev.top`）：
+机器人服务需处理三类服务端回调（同一地址 `BOT_SERVICE_URL`，默认 `https://yakidev.top`）：
 - **`check`（能力查询）**：真人端勾选「AI 对战」开关时发起，返回 `{ canCreate, reason?, message? }`
   （`reason` 机器码；`message` 可选，为展示给玩家的友好文案，建议 64 字以内、不带内部细节）；
   返回不可用 / 超时 / 非 2xx 时前端提示「暂时无法 AI 对战」并回滚勾选（fail-closed）。
 - **`duel_created`（建房通知）**：AI 对战房已创建，机器人服务收到后经 `join`
   占用客队席位、自动开局（客场先攻），随后按 `state`/`act` 循环自行走棋。
+- **`room_closed`（关房通知）**：用户主动关闭对战房间（主播关播 `stop` / 对战玩家主动退出 `leave`），
+  通知体带 `closedBy`（`host`/`player`）与 `reason`（`host_closed`/`player_leave`）；
+  收到后停止该房间走棋并释放会话资源（通知丢失时 `state` 的 `roomStatus:"closed"` 兜底）。
 
 通知体带**来源环境** `env`（`pro` / `tst` / `glb`），各环境的 `/api/ai` 基址与 agent 凭证
 相互独立，**必须先按 `env` 选定目标环境**再 `join`（用错凭证会 `401 unauthorized`）：

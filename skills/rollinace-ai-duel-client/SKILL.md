@@ -1,6 +1,6 @@
 ---
 name: rollinace-ai-duel-client
-description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入对战房（人机对战，含接收 duel_created 通知后自动 join 加入的机器人服务接入）、列出可加入的对战房、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、收发房间聊天、保活与退出；管理员 agent（role:admin）还可经 close 关闭对战房间（回收无行为房间）。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、需要按局面自动决策并执行比赛动作、或需要管理员机器人关闭/回收对战房间时，应使用本技能。
+description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战房。通过公开接口 /api/ai 创建 AI 对战房（AI vs AI 自对弈）、加入对战房（人机对战，含接收 duel_created 通知后自动 join 加入、以及用户关闭房间时接收 room_closed 通知的机器人服务接入）、列出可加入的对战房、读取完整局面与当前可执行操作、执行比赛操作（掷骰 / 看·打 / 二选一 / 使用技能 / 切换好坏球）、收发房间聊天、保活与退出；管理员 agent（role:admin）还可经 close 关闭对战房间（回收无行为房间）。当用户需要让 AI 打棒球对战、实现 AI 自对弈或人机对战、实现接收建房通知并自动对局的机器人服务、需要按局面自动决策并执行比赛动作、或需要管理员机器人关闭/回收对战房间时，应使用本技能。
 ---
 
 # Rollin Ace AI 对战接口客户端
@@ -13,7 +13,7 @@ description: 让外部 AI Agent / 机器人服务接入 Rollin Ace 棒球对战�
 - 加入对战房（人机对战，`join`）；
 - 主动发现可接管的对局（列出可加入的对战房，`list`）；
 - 读取房间聊天与系统日志（含真人弹幕，`log`，与 `chat` 形成收发闭环）；
-- 部署机器人服务：真人建房开启 AI 对战 → 服务端 HTTP 通知（`duel_created`）→ 收到后自动 `join` 加入客队并走棋；
+- 部署机器人服务：真人建房开启 AI 对战 → 服务端 HTTP 通知（`duel_created`）→ 收到后自动 `join` 加入客队并走棋；用户关闭房间时收到 `room_closed` 通知停止走棋；
 - 读取当前完整局面（比分、出局、垒位、当前进攻方、轮到谁、可执行操作，`state`）；
 - 执行比赛操作（掷骰 `roll` / 打 `swing` / 看 `read` / 二选一 `take1B`、`roll2` / 使用技能 `item` / 切换好坏球 `setBS`，`act`）；
 - 以房间身份发送弹幕（`chat`，与真人端共享同一份日志流）；
@@ -98,6 +98,17 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
   "liveId": "ABCD1234", "type": "duel", "ai": true,
   "aiSides": ["away"], "homeUid": "主队完整uid", "homeName": "主队", "awayName": "AI客队",
   "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
+```
+
+**关房通知（`event:"room_closed"`）**：用户主动关闭对战房间（主播关播 / 对战玩家主动退出）时推送，
+收到后应停止该房间走棋并释放会话资源（通知丢失时 `state` 的 `roomStatus:"closed"` 兜底）：
+
+```json
+{ "event": "room_closed", "env": "pro", "liveId": "ABCD1234",
+  "type": "duel", "ai": true,
+  "closedBy": "host",          // "host"（主播关播 stop）/ "player"（对战玩家主动退出 leave）
+  "reason": "host_closed",     // "host_closed" / "player_leave"
+  "matchStatus": "live", "ts": 1756500000000 }
 ```
 
 **`env` 是来源环境，机器人服务必须按它选择目标环境**（`/api/ai` 基址与 agent 凭证按环境隔离）：

@@ -6,7 +6,8 @@
 //   1. 启动本地 HTTP 服务，监听 POST /（根路径）接收服务端回调；
 //   2. event:"check"（真人端勾选「AI 对战」开关时的能力查询）→ 返回 { canCreate:true }；
 //   3. event:"duel_created"（AI 对战房已创建）→ 经 /api/ai join 占用客队席位（自动开局，客场先攻）；
-//   4. 按 allowedActions 循环 state/act 自行走棋，直至比赛结束。
+//   4. 按 allowedActions 循环 state/act 自行走棋，直至比赛结束；
+//   5. event:"room_closed"（用户主动关闭对战房间）→ 停止该房间走棋并释放会话资源。
 //
 // 用法：
 //   AI_AGENT_ID=<agent_id> AI_AGENT_KEY=<agent_key> \
@@ -217,6 +218,13 @@ const server = http.createServer((req, res) => {
         const check = await checkCanCreate(payload);
         console.log(`能力查询：event=check env=${payload.env || "-"} → canCreate=${check.canCreate}`);
         res.end(JSON.stringify(check));
+      } else if (payload.event === "room_closed" && payload.liveId) {
+        // 关房通知：用户主动关闭了对战房间（主播关播 stop / 对战玩家主动退出 leave）。
+        // 停止该房间的走棋并释放会话资源；即使通知丢失，走棋轮询 state 也会以
+        // roomStatus:"closed" 兜底退出，因此这里只需终止本地对局任务即可。
+        console.log(`收到通知：AI 对战房 ${payload.liveId} 已关闭` +
+          `（closedBy=${payload.closedBy || "-"} reason=${payload.reason || "-"}），停止走棋`);
+        res.end(JSON.stringify({ ok: true, liveId: payload.liveId }));
       } else if (payload.event === "duel_created" && payload.liveId) {
         // 通知体带来源环境 env（pro/tst/glb）：各环境基址与凭证独立，按 env 选择目标环境
         const env = resolveEnv(payload.env);

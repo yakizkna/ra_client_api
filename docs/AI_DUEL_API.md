@@ -11,11 +11,13 @@
 > 与真人端共用同一套对战状态机、规则引擎与直播帧通道：AI 的每一步操作都会广播为
 > 一帧，真人端可实时观战。
 >
-> 服务端侧另提供两项联动能力：
+> 服务端侧另提供以下联动能力：
 > - **能力查询（check）**：真人端勾选「AI 对战」开关时，服务端回调机器人服务（`event:"check"`）
 >   实时确认能否创建 AI 对战；机器人返回不可用则前端提示「暂时无法 AI 对战」，避免建房后机器人不加入。
 > - **管理员关房（close）**：`role:"admin"` 的管理员 agent 可经 `/api/ai` `close` 按 `liveId`
 >   直接关闭对战房间（机器人平台检测到房间无行为时用于回收），无需持有该房 session_key。
+> - **关房通知（room_closed）**：用户主动关闭对战房间（主播关播 / 对战玩家主动退出）时，
+>   服务端推送 `event:"room_closed"` 通知，便于机器人平台停止走棋并释放资源。
 >
 > 本接口作为**公开 API** 提供，接入方只需要知道本页文档中的域名与接口，无需关心后端实现。
 
@@ -115,6 +117,22 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 - `reason` 固定为机器码（不可用时 `ai_service_unavailable`）；`message` 优先取机器人平台返回的
   `message`，缺失时用通用文案；机器人平台原始 `reason` 仅放 `reasonDetail` 供诊断，
   **不会直接展示给玩家**。
+
+**关房通知（`event:"room_closed"`）：** 用户**主动关闭** AI 对战房间（主播关播 / 对战玩家主动退出）时，
+服务端向机器人服务推送通知（与 `duel_created` 同一地址与 5s 超时；失败不阻断关房，只告警）：
+
+```json
+// 请求体（POST BOT_SERVICE_URL）
+{ "event": "room_closed", "env": "pro", "liveId": "ABCD1234",
+  "type": "duel", "ai": true,
+  "closedBy": "host",          // "host"（主播关播 stop）/ "player"（对战玩家主动退出 leave）
+  "reason": "host_closed",     // "host_closed" / "player_leave"
+  "matchStatus": "live", "ts": 1756500000000 }
+```
+
+- 仅 **AI 对战房**（`ai:true`）发送；普通对战房无机器人服务，不发。
+- 机器人服务收到后应**停止该房间的走棋**并释放会话资源（后续 `state` 会返回 `room_closed`）；
+  通知丢失时以 `action:"state"` 返回的 `roomStatus:"closed"` 兜底感知。
 
 **`env`（来源环境，机器人据此选择目标环境）：**
 

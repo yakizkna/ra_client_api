@@ -51,6 +51,17 @@
   "duelInnings": 9, "startInnings": 9, "matchStatus": "waiting", "createdAt": 1756500000000 }
 ```
 
+**关房通知（`event:"room_closed"`）**：用户主动关闭对战房间（主播关播 `stop` / 对战玩家主动退出 `leave`）时推送，
+收到后停止该房间走棋并释放会话资源（`state` 的 `roomStatus:"closed"` 兜底）：
+
+```json
+{ "event": "room_closed", "env": "pro", "liveId": "ABCD1234",
+  "type": "duel", "ai": true,
+  "closedBy": "host",          // "host" / "player"
+  "reason": "host_closed",     // "host_closed" / "player_leave"
+  "matchStatus": "live", "ts": 1756500000000 }
+```
+
 **`env`（来源环境）决定机器人该连哪个环境**——`/api/ai` 基址与 agent 凭证按环境隔离：
 
 | 值 | 含义 | 服务端判定（接入方无需配置） |
