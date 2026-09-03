@@ -200,6 +200,31 @@ curl -X POST https://ace.yakidev.top/api/live -H "Content-Type: application/json
 
 ---
 
+### 0.7 玩家报名杯赛回调（event:"tour_signup"）
+
+真人玩家在官网「杯」（/tour）页面点击报名当前杯赛时，服务端**登记 uid 后**回调机器人平台
+（同一 `BOT_SERVICE_URL` 通道，5s 超时；通知失败**不阻断报名**）：
+
+```json
+// POST BOT_SERVICE_URL，Content-Type: application/json
+{
+  "event": "tour_signup",
+  "env": "pro",                        // 来源环境（pro / tst / glb），与 0.5 相同语义
+  "cupId": "B7Z42FFF", "cupName": "金杯邀请赛",
+  "playerUid": "<真实玩家完整uid>", "playerName": "玩家A",
+  "ts": 1756500000000
+}
+```
+
+AI 平台收到后应自行决定如何给该玩家分配场次：
+- **pve / pvp**：调用 `create`（`type:"tour"`）新建场次并把 `playerUid` 预占到 home/away
+  （或填入已创建杯赛场次的空席）；分配完成后玩家会在对战大厅「我的对战」看到该房并进入；
+- **eve**：无需真人报名（全 AI），此回调不会触发。
+
+> 服务端只登记与通知，不负责配对/补位/晋级；赛程推进全部由 AI 平台执行（见 4.10）。
+
+---
+
 ## 一、鉴权
 
 采用「**agent 凭证换票 → 按房间签发 session_key**」范式：
@@ -274,7 +299,11 @@ roll1 ──掷骰──▶ [1B/?] ──▶ choose ──take1B──┐
 | `log` | key | 读取房间日志 / 聊天（`type:"chat"` 只读弹幕，支持 `since` 增量） |
 | `heartbeat` | key | 保活（state/act 也会顺带刷新） |
 | `leave` | key | 退出房间：移出在线名单并撤销 key |
-| `close` | agentId + key（**仅 `role:"admin"`**） | 管理员机器人关闭对战房间（按 `liveId`，无需 session_key） |
+| `close` | agentId + key（**`role:"admin"` 或 `role:"cup"`（限本平台房）**） | 关闭对战房间（按 `liveId`，无需 session_key；杯赛超时可用 `force:true`） |
+| `createCup` | agentId + key（**`role:"cup"`/`admin`**） | 创建全局杯赛（八强 8 席，open 可报名） |
+| `cupReport` | agentId + key（**`role:"cup"`/`admin`**） | 上报某场对阵/胜者到杯赛晋级表（幂等） |
+| `endCup` | agentId + key（**`role:"cup"`/`admin`**） | 结束杯赛（关闭报名，幂等） |
+| `reward` | agentId + key（**`role:"cup"`/`admin`**） | 赛后给真人胜者发放奖品技能包（增量、封顶、幂等） |
 
 > 服务方按 agent + 接口记录调用量，可在管理端「AI 管理」页查看各 agent 的分接口调用量与最近活跃时间。
 
@@ -315,7 +344,13 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `homeName` / `awayName` | 否 | 队名（缺省 `AI主队` / `AI客队`） |
 | `innings` | 否 | 总局数 1~9，默认 9 |
 | `startInning` | 否 | 开局位置，默认等于 `innings` |
-| `aiSides` | 否 | 由 AI 接管的席位数组，默认 `["home","away"]`（自对弈）；传 `["away"]` 表示主队留给真人 |
+| `aiSides` | 否 | 由 AI 接管的席位数组，默认 `["home","away"]`（自对弈）；传 `["away"]` 表示主队留给真人；**显式传 `[]` 且不指定 uid = 空房**（无席位占用、waiting，等待 AI 或玩家加入） |
+| `type` | 否 | 房间类型：`duel`-对战房（默认）/ `tour`-杯赛场次房（需 `role:"cup"`/`admin`）。两种类型共用对战引擎，tour 房可关联杯赛（`cupId`/`round`） |
+| `homeUid`/`awayUid` | 否 | 预占**真实玩家 uid** 到该席位（不发 key；与同席 `aiSides` 互斥）。预占的玩家登录后可在对战大厅「我的对战」看到并进入（waiting 等对手） |
+| `name` | 否 | 场次展示名（如「八强赛 A1」），杯赛编排标识用 |
+| `round` | 否 | 轮次元数据（如 `QF`/`SF`/`F` 或自定义，AI 平台编排用） |
+| `cupId` | 否 | 归属杯赛 id（`createCup` 返回），用于把场次关联到杯赛 |
+| `prize` | 否 | tour 房预设胜者奖品（技能包，如 `{ "bat": 2, "mist": 1 }`，仅对真人胜者有效；reward 未传 prize 时兜底用它） |
 | `stream` | 否 | 是否出现在直播大厅（默认 false，避免污染大厅；置 true 可被观战） |
 | `liveId` | 否 | 指定房间号（缺省自动生成 8 位） |
 
@@ -704,6 +739,96 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | 非对战房 | `仅支持关闭对战房间`（`not_duel`） |
 - 与 `leave` 的区别：`leave` 需持有 session_key 且只能退出自己的席位；`close` 是**管理员级**的
   强制回收入口（不占用 / 不依赖任何席位），适合机器人平台定时巡检关房。
+
+---
+
+## 4.10 杯赛（tour）：创建 / 上报对阵 / 结束 / 发奖
+
+> 杯赛是「全局同一时间一个」的八强淘汰赛（8 进 4 → 4 进 2 → 2 进 1），由 AI 平台经本组
+> `role:"cup"`（赛事管理）或 `role:"admin"` agent 管理。服务端只存杯赛状态与对阵表，**赛程推进
+> 由 AI 平台执行**：轮询每场 `matchStatus=ended` + `winner`，再按结果建下一轮房并上报晋级表，
+> 直至决出冠军后 `endCup`。
+
+### 4.10.1 创建杯赛 createCup
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"createCup","agentId":"ag_xxxxxabcde","key":"<cup_key>",
+  "name":"金杯邀请赛","mode":"pve","aiRoster":["AI 选手甲","AI 选手乙"],
+  "prize":{"bat":2,"mist":1}
+}'
+```
+
+参数：`name`（杯名）、`mode`（`pvp`/`pve`/`eve`，默认 pvp）、`aiRoster`（AI 选手名单，
+报名窗口后由平台用它们补满 8 席）、`prize`（冠军奖品技能包，如 `{bat:2,mist:1}`，仅对真人有效）。
+
+响应 `cup` 含：`cupId/name/mode/status(open)/aiRoster/signups/bracket/prize/ownerAgentId/createdAt`。
+已有未结束杯赛时返回 409 `cup_active`；仅 `cup`/`admin` 角色可调用。
+
+**选手构成（推荐流程）**：`createCup` 后真人经官网「杯」页报名（自动登记到 `signups` 并回调
+机器人平台 `tour_signup`）；AI 平台等待一段时间（如 10 分钟）后，用 `aiRoster` 补满 8 席
+（真人不足 8 人时），随后按报名顺序建场：
+
+### 4.10.2 上报对阵与胜者 cupReport（晋级图数据，服务端只存不自动回写）
+
+```bash
+# 每场结束（或建场后先报对阵、结束后再补 winner）调一次；同 liveId/槽位重复上报为覆盖（幂等）
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"cupReport","agentId":"ag_xxxxxabcde","key":"<cup_key>",
+  "round":"QF","index":0,"liveId":"ABCD1234",
+  "homeName":"玩家A","awayName":"AI 选手甲","winnerName":"玩家A","winnerUid":"<real uid>"
+}'
+```
+
+- `round`：`QF`（八强，0~3）/ `SF`（半决赛，0~1）/ `F`（决赛，0）；
+- 不传 `index` 时按 `liveId` 定位槽位（找不到则追加）；
+- 服务端写入 `cup.bracket[round][index]`，官网「杯」页晋级图据此从左往右渲染。
+
+### 4.10.3 结束杯赛 endCup
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" \
+  -d '{"action":"endCup","agentId":"ag_xxxxxabcde","key":"<cup_key>"}'
+```
+
+幂等；将 `cup.status` 置 `ended`（关闭报名，页面只读展示）。
+
+### 4.10.4 发奖 reward（仅真人胜者，服务端直接入账）
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"reward","agentId":"ag_xxxxxabcde","key":"<cup_key>",
+  "liveId":"ABCD1234"            // prize 省略时取该 tour 房预设（create 时传的 prize）
+}'
+```
+
+- 校验房间 `matchStatus=ended` 且胜者为**真实玩家 uid**（非 `ai:` 前缀）；AI 胜者返回
+  `aiWinner:true` 且**不发放**（奖品只对真人有效）；
+- 入账为**增量 +N**、单种封顶 20、总量封顶 120，与官网背包同一份库存；
+- 幂等：同一房同一胜者重复调用返回 `already:true`，不重复入账；
+- 角色：`cup`/`admin`。
+
+### 4.10.5 关闭超时杯赛房（close 的 cup 权限）
+
+`role:"cup"` agent 可对**本平台创建**的房调 `close`（owner 校验；非本人创建 → 403 `not_owner`），
+reason 建议 `timeout`（房间关闭后对局方收到「长时间无操作，房间关闭」文案）；超时时长由
+AI 平台自行判定；对仍在推进的对局默认有活跃保护，确需强制关闭时带 `force:true`（仅 cup/admin）。
+
+### 4.10.6 杯赛最小编排流程参考（pvp / pve / eve）
+
+```
+1. createCup { name, mode, aiRoster, prize }                    # 建杯，open 报名
+2. 真人端「杯」页报名 → 收到回调 event:"tour_signup"             # 见 0.7
+3. 等报名窗口结束 → 用 aiRoster 补满 8 席
+4. 建八强 4 场：
+   pvp : create { type:"tour", cupId, round:"QF", homeUid:A, awayUid:B }
+   pve : create { type:"tour", cupId, round:"QF", homeUid:玩家, aiSides:["away"], awayName:"AI 选手甲" }
+   eve : create { type:"tour", cupId, round:"QF", aiSides:["home","away"] }   # 双方 AI 立即开局
+   （等待窗口未满时对空缺席位的房先建空房，对方 join 后开局）
+5. 每场结束后读 state：matchStatus=="ended" && winner → cupReport 上报（含胜者）
+6. 半决赛/决赛重复 4~5；冠军决出后 endCup
+7. 需要给真人冠军/胜者发奖 → reward { liveId }（或带 prize 覆盖）
+```
 
 ---
 

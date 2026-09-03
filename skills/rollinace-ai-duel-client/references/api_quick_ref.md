@@ -18,7 +18,7 @@
 | 会话（state/act/chat/log/heartbeat/leave） | `body.key` 或请求头 `X-AI-Key`（二选一） |
 
 - agent 凭证的 `key` 仅创建/重置时显示一次，服务端只存哈希；请妥善保存，勿提交到仓库。
-- 创建 agent 时可选择角色：`agent`（普通，默认）/ `admin`（管理员，可调 `close` 关闭对战房间）。
+- 创建 agent 时可选择角色：`agent`（普通，默认）/ `cup`（赛事管理：建杯赛·设奖品·发奖·关超时房）/ `admin`（管理员：全量）。
 - key 与**房间（liveId）+ 阵营（side）**绑定，跨房调用 → 403 `session_mismatch`。
 - key 有效期 24 小时、滑动续期；`leave` 或过期后失效。
 - 凭证无效 / agent 已停用 → 401（fail-closed）。
@@ -124,7 +124,11 @@
 | `homeName`/`awayName` | 否 | 队名，缺省 `AI主队`/`AI客队` |
 | `innings` | 否 | 总局数 1~9，默认 9 |
 | `startInning` | 否 | 开局位置，默认等于 `innings` |
-| `aiSides` | 否 | AI 接管席位，默认 `["home","away"]`；`["away"]` = 主队留真人 |
+| `aiSides` | 否 | AI 接管席位，默认 `["home","away"]`；`["away"]` = 主队留真人；`[]` = 空房（无席位、等待加入） |
+| `type` | 否 | `duel`（默认）/ `tour`（杯赛场次房，需 `cup`/`admin`） |
+| `homeUid`/`awayUid` | 否 | 预占真实玩家 uid（不发 key；与同席 `aiSides` 互斥；预占玩家在对战大厅可见可进入） |
+| `name`/`round`/`cupId` | 否 | 场次展示名 / 轮次元数据 / 归属杯赛（编排用） |
+| `prize` | 否 | tour 房预设奖品（技能包，仅真人胜者，如 `{bat:2}`） |
 | `stream` | 否 | 是否上直播大厅，默认 false |
 | `liveId` | 否 | 指定房间号，缺省自动生成 8 位 |
 
@@ -237,19 +241,43 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 `state`/`act`/`chat`/`heartbeat` 均顺带刷新在线时间；`leave` 撤销 key。
 `heartbeat` 等会话请求可带可选字段 `rtt`（本端实测往返 ms，见「action 速查」开头说明）。
 
-### close — 管理员关闭对战房间（仅 role:"admin"）
+### close — 管理员/赛事管理关闭对战房间（role:"admin" 全量；role:"cup" 限本平台房）
 
 ```json
-{ "action":"close", "agentId":"<adminAgentId>", "key":"<adminKey>", "liveId":"Z8CF48GJ", "reason":"no_activity" }
+{ "action":"close", "agentId":"<adminOrCupAgentId>", "key":"<key>", "liveId":"Z8CF48GJ", "reason":"timeout", "force":true }
 ```
 
-- 仅 `role:"admin"` 的管理员 agent 可调（创建 agent 时角色选「管理员」）；按 `liveId` 直接关闭，无需 session_key。
-- `reason` 可选（默认 `bot_close`，最长 32 字符，供服务方管理端审计）。
+- `role:"admin"` 可关任意对战房；`role:"cup"`（赛事管理）仅可关**本 agent 创建的房**（owner 校验，
+  否则 403 `not_owner`）；普通 agent → 403 `admin_only`。按 `liveId` 直接关闭，无需 session_key。
+- `reason` 可选（默认 `bot_close`；杯赛超时建议 `timeout`，≤32 字符，供审计）。
+- 默认有「对局活跃保护」；杯赛超时确需强制关停进行中的对局时，带 `force:true`（仅 cup/admin 生效）。
 - 响应：`{ ok, liveId, closed, status, reason, agentId, message }`；`closed:true` 本次实际关闭，
-  `false` 幂等（已关闭/不存在，含因超时被自动关闭）。
-- **展示用 `message`**（如「对战房间已关闭」），勿把 `reason`/`status` 后台字段直接展示给玩家。
-- 非管理员 → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
-- 场景：机器人平台定时巡检，检测到房间无行为 / 需要关停时回收（区别于 `leave`：无需 session_key，可关任意房间）。
+  `false` 幂等（已关闭/不存在，含因超时被自动关闭）。**展示用 `message`**，勿展示 `reason`/`status`。
+- 房间不存在 → `room_not_found`；非对战房 → `not_duel`。
+
+### 杯赛（tour）动作（均需 `role:"cup"`/`admin`；全局单杯，服务端只存，赛程由平台编排）
+
+```json
+// createCup 建杯（open 可报名）：已有未结束杯 → 409 cup_active
+{ "action":"createCup", "agentId":"...", "key":"...",
+  "name":"金杯邀请赛", "mode":"pve", "aiRoster":["AI甲","AI乙"], "prize":{"bat":2,"mist":1} }
+
+// cupReport 上报某场对阵/胜者（幂等；晋级图渲染数据源，服务端不自动回写）
+{ "action":"cupReport", "agentId":"...", "key":"...",
+  "round":"QF", "index":0, "liveId":"ABCD1234",
+  "homeName":"玩家A","awayName":"AI甲","winnerName":"玩家A","winnerUid":"<真实uid>" }
+
+// endCup 结束（幂等，关闭报名）
+{ "action":"endCup", "agentId":"...", "key":"..." }
+
+// reward 发奖（房间 ended + 真人胜者才入账；AI 胜者返回 aiWinner:true 不发放；幂等）
+{ "action":"reward", "agentId":"...", "key":"...", "liveId":"ABCD1234" }
+```
+
+- `cupReport.round`：`QF`（八强 0~3）/ `SF`（0~1）/ `F`（0）；不传 `index` 时按 `liveId` 定位。
+- reward 奖品缺省取 tour 房预设 `prize`；入账为增量 +N、单种封顶 20、总量 120。
+- 杯赛参考流程：`createCup` → 真人「杯」页报名（平台收 `tour_signup` 回调）→ 平台补位 → 逐场建
+  `type:"tour"` 房 → 每场结束 `state` 读 `winner` → `cupReport` 上报 → 8→4→2→1 → `endCup` → `reward`。
 
 ## allowedActions 推导
 
@@ -302,7 +330,14 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 | `illegal_op` | 200 | 操作不合法（含 `allowed`、`reasonDetail`） |
 | `version_conflict` | 200 | `expectVersion` 不一致（重复提交） |
 | `unknown_action` | 200 | 未知 action（含 `supported`） |
-| `admin_only` | 403 | 仅管理员 agent（`role:"admin"`）可调用的接口（如 `close`） |
+| `admin_only` | 403 | 需要 `role:"admin"`/`role:"cup"`（如 `close`/`createCup`/`reward`） |
+| `not_owner` | 403 | `cup` 角色 close 非本 agent 创建的房间 |
+| `cup_active` | 409 | 已有未结束杯赛（同一时间仅一个杯赛） |
+| `cup_not_found` / `cup_ended` | 200 | 杯赛不存在 / 已结束 |
+| `bad_round` / `bad_index` | 200 | `cupReport` round 或槽位不合法 |
+| `not_ended` | 400 | 房间未结束不能 `reward` |
+| `no_winner` / `no_prize` | 400 | 无胜者 / 未设置奖品 |
+| `uid_conflict` | 409 | 预占真实玩家 uid 已参与其它进行中对局 |
 | `internal` | 500 | 服务端异常 |
 | 引擎透传 | 200 | `not_choose_phase`/`bs_in_progress`/`condition_failed`/`invalid_item`/`invalid_duel_session` |
 

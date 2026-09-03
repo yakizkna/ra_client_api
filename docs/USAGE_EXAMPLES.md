@@ -402,9 +402,10 @@ since = logs.logs.length ? logs.logs[logs.logs.length - 1].ts : since;
 
 ## 10. 管理员关闭对战房间（close）
 
-回收「无行为 / 需要关闭」的对战房间：**仅 `role:"admin"` 的管理员 agent 可调用**
-（管理端「AI 管理」页创建 agent 时角色选「管理员」），按 `liveId` 直接关闭，
-无需持有该房间的 session_key。适合机器人平台定时巡检：检测到房间无行为 / 需要关停时用它回收。
+回收「无行为 / 需要关闭」的对战房间：**`role:"admin"` 的管理员 agent 可关闭任意对战房；
+`role:"cup"` 的赛事管理 agent 可关闭本平台创建的房**（owner 校验），按 `liveId` 直接关闭，
+无需持有该房间的 session_key。适合机器人平台定时巡检 / 杯赛超时回收（`reason:"timeout"`，
+超时时长由平台自定；需强制关闭仍在推进的对局时带 `force:true`）。
 
 ```bash
 BASE=https://ace.yakidev.top
@@ -437,4 +438,41 @@ setInterval(async () => {
 
 - 非管理员 agent 调用 → 403 `admin_only`；房间不存在 → `room_not_found`；非对战房 → `not_duel`。
 - 与 `leave` 的区别：`leave` 需持有 session_key 且只能退出自己的席位；`close` 是**管理员级**
-  的强制回收入口，不占用 / 不依赖任何席位，可关任意对战房间。
+  的强制回收入口，不占用 / 不依赖任何席位（cup 角色限本平台房）。
+
+## 11. 杯赛（tour）编排最小示例（curl，需 `role:"cup"`/`admin` agent）
+
+> 服务端只提供杯赛状态与单场结果；**建场/补位/晋级全部由 AI 平台编排**（8→4→2→1）。
+> 真人端官网「杯」页报名后你会收到回调 `event:"tour_signup"`（含 `playerUid`）。
+
+```bash
+BASE=https://ace.yakidev.top
+CUP_ID=<cup_agent_id>       # 管理端「AI 管理」创建角色为「赛事管理 cup」的 agent
+CUP_KEY=<cup_agent_key>
+
+# 1) 建杯（全局同一时间一个；已有未结束杯返回 409 cup_active）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"createCup","agentId":"'"$CUP_ID"'","key":"'"$CUP_KEY"'",\
+       "name":"金杯邀请赛","mode":"pve","aiRoster":["AI甲","AI乙"],"prize":{"bat":2,"mist":1}}' | jq '.cup'
+
+# 2) 等报名窗口（真人「杯」页报名 → 收到 tour_signup 回调）→ 用 aiRoster 补位后建八强场次。
+#    pve 单场示例：真人 uid 预占主队，客队由 AI 接管
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"create","agentId":"'"$CUP_ID"'","key":"'"$CUP_KEY"'","type":"tour",\
+       "cupId":"B7Z42FFF","round":"QF","index":0,"name":"八强 A1",\
+       "homeUid":"<真实玩家uid>","homeName":"玩家A","aiSides":["away"],"awayName":"AI甲","innings":3,"startInning":3}' | jq '{liveId,type,keys}'
+
+# 3) 每场结束读结果 → 上报对阵/胜者（晋级图数据，幂等）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"cupReport","agentId":"'"$CUP_ID"'","key":"'"$CUP_KEY"'",\
+       "round":"QF","index":0,"liveId":"ABCD1234","homeName":"玩家A","awayName":"AI甲",\
+       "winnerName":"玩家A","winnerUid":"<真实玩家uid>"}' | jq '{ok,round,index}'
+
+# 4) 半决赛/决赛同上（round=SF/F）；冠军决出后结束杯赛
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"endCup","agentId":"'"$CUP_ID"'","key":"'"$CUP_KEY"'"}' | jq '.cup.status'
+
+# 5) 给真人胜者发奖（仅真人胜者入账；AI 胜者返回 aiWinner:true 不发放；幂等）
+curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" \
+  -d '{"action":"reward","agentId":"'"$CUP_ID"'","key":"'"$CUP_KEY"'","liveId":"ABCD1234"}' | jq '{ok,winnerUid,granted,total}'
+```
