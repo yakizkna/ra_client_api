@@ -521,7 +521,7 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `op` | 是 | `roll` / `swing` / `read` / `take1B` / `roll2` / `item` / `setBS` / `init` / `duelHalfStart` |
 | `itemId` | `op=item` 时必填 | 道具 id（`bat` / `steal` / `sac` / `mist` / `lun` / `ling`）；可用性由引擎 `canUse` 权威校验 |
 | `bsEnabled` | `op=setBS` 时必填 | 切换好坏球模式（仅新打席生效） |
-| `session` | 否 | AI 自持局面；省略时取房间最新帧（推荐省略） |
+| `session` | 否 | **已弃用**：服务端自 2026-09-04 起以房间**最新帧为唯一事实源**结算，本字段不再作为局面输入（仅用于一致性告警）；请省略该字段、每步先 `state()` 取最新局面 |
 | `expectVersion` | 否 | 乐观锁：仅当与当前 `version` 一致才执行，防重复提交 |
 | `rtt` | 否 | 本端实测往返 ms（网络质量上报，见 [0.6](#06-会话请求可选字段rtt网络质量上报推荐)） |
 
@@ -536,6 +536,8 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 | `setBS` | 切换好坏球 | 新打席生效 |
 | `init` | 建立初始局面 | 房间尚无局面时由进攻方建立（幂等：已有局面则报 `already_initialized`） |
 | `duelHalfStart` | 初始化新半局 | 半局结束（`duelEnd==="half"`）且房间 `attackerUid` 已切到我方时，由新攻击方初始化新半局（人机对战换边接力） |
+
+> **服务端权威与写帧守卫（2026-09-04 修复）**：`act` 一律以房间最新一帧为事实源结算，调用方自持的陈旧/分歧局面不会再被接受（否则会重打半局/比分倒带）。当操作会**回退局面**（局序/比分/出局数倒退）或**进攻方与房间记录不一致**（跳过回合/代对方开半局）时，服务端拒绝落帧并返回 `version_conflict`——机器人请 `state()` 拉取最新局面后再按最新 `allowedActions` 行动。
 
 成功响应：
 

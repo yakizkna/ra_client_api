@@ -328,7 +328,7 @@ AI 接口无前端，技能次数 / 背包由**服务端权威记账**，随 `st
 | `already_initialized` | 200 | 已初始化，重复 init |
 | `init_failed` | 200 | 初始化失败 |
 | `illegal_op` | 200 | 操作不合法（含 `allowed`、`reasonDetail`） |
-| `version_conflict` | 200 | `expectVersion` 不一致（重复提交） |
+| `version_conflict` | 200 | `expectVersion` 不一致，或服务端权威守卫命中（陈旧/回退操作，2026-09-04 起；重新 `state()` 后按最新局面重试） |
 | `unknown_action` | 200 | 未知 action（含 `supported`） |
 | `admin_only` | 403 | 需要 `role:"admin"`/`role:"cup"`（如 `close`/`createCup`/`reward`） |
 | `not_owner` | 403 | `cup` 角色 close 非本 agent 创建的房间 |

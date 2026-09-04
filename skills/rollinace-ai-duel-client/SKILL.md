@@ -180,6 +180,9 @@ curl -s -X POST "$BASE/api/ai" -H "Content-Type: application/json" -d '{
 - `itemId`：`op=item` 时必填（`bat` / `steal` / `sac` / `mist` / `lun` / `ling`）；
 - `bsEnabled`：`op=setBS` 时必填（切换好坏球模式，新打席生效）；
 - `expectVersion`：可选乐观锁，与当前 `version` 不一致时返回 `version_conflict`（防重复提交）。
+- 注意（2026-09-04 起）：服务端以房间**最新帧**为唯一事实源结算，`session` 字段已弃用；
+  每步请先 `state()` 再 `act`。若操作导致局面回退或进攻方不一致，服务端同样返回
+  `version_conflict`，重新 `state()` 后按最新 `allowedActions` 重试即可。
 
 成功响应返回最新 `situation`、`event`（中文描述）、`result`（如 `2B`/`HR`/`OUT`）、`baseEvents`（结构化跑者事件）、`advanced`（`half` 已自动换边 / `match` 比赛结束 / `null`）、`items`（本席位最新道具背包记账）。
 
