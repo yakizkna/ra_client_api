@@ -304,6 +304,7 @@ roll1 ──掷骰──▶ [1B/?] ──▶ choose ──take1B──┐
 | `cupReport` | agentId + key（**`role:"cup"`/`admin`**） | 上报某场对阵/胜者到杯赛晋级表（幂等） |
 | `endCup` | agentId + key（**`role:"cup"`/`admin`**） | 结束杯赛（关闭报名，幂等） |
 | `reward` | agentId + key（**`role:"cup"`/`admin`**） | 赛后给真人胜者发放奖品技能包（增量、封顶、幂等） |
+| `cupSignupRemove` | agentId + key（**`role:"cup"`/`admin`**） | 从大会报名表移除某真人报名（`uid`）；幂等（不在表也 ok）；配合真人端「已报名」状态撤销与平台本地名单同步删除，避免被报名期远端同步重新加回 |
 
 > 服务方按 agent + 接口记录调用量，可在管理端「AI 管理」页查看各 agent 的分接口调用量与最近活跃时间。
 
@@ -810,13 +811,31 @@ curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" 
 - 幂等：同一房同一胜者重复调用返回 `already:true`，不重复入账；
 - 角色：`cup`/`admin`。
 
-### 4.10.5 关闭超时杯赛房（close 的 cup 权限）
+### 4.10.5 移除真人报名 cupSignupRemove
+
+从大会权威报名表移除某真人报名（`uid`），用于撤销误报名 / 清理占位后让该 uid 在官网
+「大会」页回到可报名态；**平台侧删除本地名单时应同步调用本动作**，否则真人端「已报名」
+状态以权威表为准仍显示已报名，且平台报名期定时从 `cupGet` 拉取同步时又会被加回。
+
+```bash
+curl -X POST https://ace.yakidev.top/api/ai -H "Content-Type: application/json" -d '{
+  "action":"cupSignupRemove","agentId":"ag_xxxxxabcde","key":"<cup_key>",
+  "uid":"<真实玩家 uid>"
+}'
+```
+
+- 幂等：uid 不在报名表 / 远端暂无大会时返回 `ok:true, removed:false`（不报错）；
+- 是否允许此刻抽人由 **AI 平台编排守卫**决定（`ra_duel_bot` 在已锁定/开赛后拒绝），
+  本动作只删除权威报名，不按 cup 状态拒绝（`cup.status` 整届保持 open 直至 endCup）；
+- 响应：`{ ok, removed, cup }`；角色：`cup`/`admin`。
+
+### 4.10.6 关闭超时杯赛房（close 的 cup 权限）
 
 `role:"cup"` agent 可对**本平台创建**的房调 `close`（owner 校验；非本人创建 → 403 `not_owner`），
 reason 建议 `timeout`（房间关闭后对局方收到「长时间无操作，房间关闭」文案）；超时时长由
 AI 平台自行判定；对仍在推进的对局默认有活跃保护，确需强制关闭时带 `force:true`（仅 cup/admin）。
 
-### 4.10.6 杯赛最小编排流程参考（pvp / pve / eve）
+### 4.10.7 杯赛最小编排流程参考（pvp / pve / eve）
 
 ```
 1. createCup { name, mode, aiRoster, prize }                    # 建杯，open 报名
